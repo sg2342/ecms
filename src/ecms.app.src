@@ -10,7 +10,7 @@
     crypto
    ]},
   {env,[]},
-  {modules, [ecms]},
+  {modules, [ecms, 'CMS', 'PKIX1Explicit88']},
 
   {licenses, ["Apache-2.0"]},
   {links, []}
