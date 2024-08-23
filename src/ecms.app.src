@@ -1,0 +1,17 @@
+{application, ecms,
+ [{description, "RFC5652 Cryptographic Message Syntax (CMS)"},
+  {vsn, git},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    public_key,
+    asn1,
+    crypto
+   ]},
+  {env,[]},
+  {modules, [ecms]},
+
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.
