@@ -16,7 +16,7 @@ IMPORTS
 -- AES information object identifiers --
 
 aes OBJECT IDENTIFIER ::= { joint-iso-itu-t(2) country(16) us(840)
-               organization(1) gov(101) csor(3)_ nistAlgorithms(4)  1 }
+               organization(1) gov(101) csor(3) nistAlgorithms(4)  1 }
 
 -- AES using CBC-chaining mode for key sizes of 128, 192, 256
 
