@@ -3,9 +3,153 @@
 Implementation of (parts of) RFC 5652 Cryptographic Message Syntax (CMS)
 """.
 
--export([verify/2]).
+-export([verify/2, sign/2, sign/3]).
 
 -include_lib("public_key/include/public_key.hrl").
+
+-doc """
+Sign `Data` using `SignCert` and `SignKey`
+""".
+-spec sign(Data :: binary(),
+	   SignCert :: public_key:der_encoded(),
+	   SignKey :: public_key:der_encoded()) ->
+	  {ok, Signed :: binary()} | {error, _}.
+sign(Data, SignCert, SignKey) ->
+    sign(Data, #{ signers => [{SignCert, SignKey}] }).
+
+
+-doc """
+sign `Data`
+""".
+-spec sign(Data :: binary(),
+	   Opts :: #{ digest_type => crypto:sha2(),
+		      singning_time => calendar:datetime(),
+		      resign => boolean(),
+		      included_certs => [Certificate :: public_key:der_encoded()],
+		      signers := [{SignCert :: public_key:der_encoded(),
+				   SignKey :: public_key:der_encoded()}]
+		    }) ->
+	  {ok, Signed :: binary()} | {error, _}.
+sign(Data, Opts) when is_map(Opts) ->
+	sign1(Data,
+	      maps:merge(#{ digest_type => sha256,
+			    singning_time => {date(), time()},
+			    resign => false,
+			    included_certs => [] }, Opts)).
+
+sign1(InDER, #{ resign := true, included_certs := IncludedCerts0 } = Opts0) ->
+    IdSignedData = 'CMS':'id-signedData'(),
+    IdData = 'CMS':'id-data'(),
+    maybe
+	{ok, #{contentType := IdSignedData, content := SignedDataDER}} ?=
+	    'CMS':decode('ContentInfo', InDER),
+	{ok, #{ encapContentInfo := #{ eContentType := IdData,
+				       eContent := Content },
+	        signerInfos := SignerInfos,
+		digestAlgorithms := DigestAlgorithms,
+	        crls := Crls,
+	        certificates := Certs0 }} ?=
+	    'CMS':decode('SignedData', SignedDataDER),
+	Certs1 = ['PKIX1Explicit88':encode('Certificate', C) ||
+		     {certificate, C} <- Certs0],
+	{_, Certs} = lists:unzip(Certs1),
+	IncludedCerts = Certs ++ IncludedCerts0,
+	Opts = Opts0#{ resign => false,
+		       included_certs => IncludedCerts },
+	sign2(Content, SignerInfos, DigestAlgorithms, Crls, Opts)
+    else {error, _} = E -> E end;
+sign1(Content, Opts) -> sign2(Content, [], [], [], Opts).
+
+sign2(Content, SignerInfos0, DigestAlgorithms0, Crls,
+      #{ digest_type := DigestType,
+	 singning_time := SigningTime,
+	 included_certs := IncludedCertsDER,
+	 signers := Signers }) ->
+    maybe
+	ContentDigest = crypto:hash(DigestType, Content),
+	{ok, ContentTypeDER} = 'CMS':encode('ContentType', 'CMS':'id-data'()),
+	{ok, MessageDigestDER} = 'CMS':encode('Digest', ContentDigest),
+	{ok, SigningTimeDER} = 'CMS':encode('SigningTime',
+					{generalTime, fmt_datetime(SigningTime)}),
+	SignedAttrs =
+	    [#{ attrType => 'CMS':'id-contentType'(),
+		attrValues => [ContentTypeDER] },
+	     #{ attrType => 'CMS':'id-signingTime'(),
+		attrValues => [SigningTimeDER] },
+	     #{ attrType => 'CMS':'id-messageDigest'(),
+		attrValues => [MessageDigestDER] }],
+	{ok, SignedAttrsDER} = 'CMS':encode('SignedAttributes', SignedAttrs),
+	Digest = crypto:hash(DigestType, SignedAttrsDER),
+	{ok, SignerInfos} ?= sign3(Signers, Digest, DigestType, SignedAttrs, []),
+
+	DigestAlgorithms = lists:usort([A || #{digestAlgorithm := A} <- SignerInfos]
+				       ++ DigestAlgorithms0),
+
+	{CertsDER, _} = lists:unzip(Signers),
+	IncludedCerts1 = ['PKIX1Explicit88':decode('Certificate', C) ||
+			     C <- IncludedCertsDER ++ CertsDER],
+	IncludedCerts = lists:usort([{certificate, C} || {ok, C} <- IncludedCerts1]),
+
+	{ok, SignedDataDER} ?=
+	    'CMS':encode('SignedData',
+			 #{ version => v3,
+			    digestAlgorithms => DigestAlgorithms,
+			    certificates => IncludedCerts,
+			    crls => Crls,
+			    signerInfos => SignerInfos ++ SignerInfos0,
+			    encapContentInfo =>
+				#{ eContentType => 'CMS':'id-data'(),
+				   eContent => Content } }),
+	'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-signedData'(),
+				       content => SignedDataDER})
+    else {error, _} = E -> E end.
+
+sign3([], _Digest, _DigestType, _SignedAttrs, SignerInfos) ->
+    {ok, SignerInfos};
+sign3([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInfos0) ->
+    maybe
+	{ok, #{tbsCertificate := TbsCertificate}}
+	    ?= 'PKIX1Explicit88':decode('Certificate', CertDER),
+	Key = public_key:der_decode('PrivateKeyInfo', KeyDER),
+	{DigestAlgorithm, SignatureAlgorithm} =
+	    sign_algs(DigestType, Key),
+	IaS = maps:with([serialNumber, issuer], TbsCertificate),
+	Signature = public_key:sign({digest, Digest}, DigestType, Key),
+	Si = #{ version => v1,
+		sid => {issuerAndSerialNumber, IaS},
+		digestAlgorithm => DigestAlgorithm,
+		signatureAlgorithm => SignatureAlgorithm,
+		signature => Signature,
+		signedAttrs => SignedAttrs
+	      },
+	sign3(T, Digest, DigestType, SignedAttrs, [Si | SignerInfos0])
+    end.
+
+
+-define('id-dsa-with-sha512', {2, 16, 840, 1, 101, 3, 4, 3, 4}).
+-define('id-dsa-with-sha384', {2, 16, 840, 1, 101, 3, 4, 3, 3}).
+
+sign_algs(sha512 = H, K) -> { #{algorithm => ?'id-sha512'}, sign_algs1(H, K) };
+sign_algs(sha384 = H, K) -> { #{algorithm => ?'id-sha384'}, sign_algs1(H, K) };
+sign_algs(sha256 = H, K) -> { #{algorithm => ?'id-sha256'}, sign_algs1(H, K) };
+sign_algs(sha224 = H, K) -> { #{algorithm => ?'id-sha224'}, sign_algs1(H, K) }.
+
+sign_algs1(sha512, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha512' };
+sign_algs1(sha384, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha384' };
+sign_algs1(sha256, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha256' };
+sign_algs1(sha224, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha224' };
+sign_algs1(sha512, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA512' };
+sign_algs1(sha384, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA384' };
+sign_algs1(sha256, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA256' };
+sign_algs1(sha224, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA224' };
+sign_algs1(_, #'RSAPrivateKey'{}) ->
+    #{ algorithm => ?'rsaEncryption', parameters => <<5, 0>> }.
+
+
+-spec fmt_datetime(calendar:datetime()) -> string().
+fmt_datetime({{Year, Month, Day}, {Hour, Minute, Second}}) ->
+    lists:flatten(io_lib:format("~w~2..0w~2..0w~2..0w~2..0w~2..0wZ",
+				[Year, Month, Day, Hour, Minute, Second])).
 
 -doc """
 Verify CMS DER binary `InDER`
