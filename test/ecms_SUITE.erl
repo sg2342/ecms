@@ -4,9 +4,68 @@
 
 -export([verify/1, verify_noattr/1, verify_nocerts/1, verify_chain/1, verify_fail/1]).
 
-all() ->
-    [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail].
+-export([sign/1, sign_chain/1, sign_fail/1]).
 
+all() ->
+    [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
+     sign, sign_chain, sign_fail
+    ].
+
+sign(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [PlainF, SignedF, ResignedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "signed", "resigned"]],
+    [Dsa1, Dsa2, Ec1, Ec2, Rsa1, Rsa2, SelfS0, SmRoot] =
+	[filename:join(DataD, V) ||
+	V <- ["smdsa1.pem", "smdsa2.pem", "smec1.pem", "smec2.pem",
+	      "smrsa1.pem", "smrsa2.pem", "selfs0.pem", "smroot.pem"]],
+    Plain = testinput(),
+    {ok, Signed} = ecms:sign(Plain,
+			     #{ digest_type => sha224,
+				signers => [der_cert_and_key_of_pem(Dsa1),
+					    der_cert_and_key_of_pem(Ec1)] }),
+    ok = file:write_file(SignedF, Signed),
+    cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
+    {ok, Plain} = file:read_file(PlainF),
+    Signers = lists:map(fun der_cert_and_key_of_pem/1, [Dsa2, Ec2, Rsa2, Rsa1]),
+    {ok, Resigned} = ecms:sign(Signed,
+			       #{ digest_type => sha224,
+				  resign => true,
+				  signers => Signers }),
+    ok = file:write_file(ResignedF, Resigned),
+    cms_verify(ResignedF, PlainF, ["-CAfile", SmRoot]),
+    {ok, Plain} = file:read_file(PlainF),
+    lists:foreach(
+      fun(H) ->
+	      {ok, Signed2} = ecms:sign(Plain,
+					#{ digest_type => H,
+					   signers => Signers }),
+	      ok = file:write_file(SignedF, Signed2),
+	      cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
+	      {ok, Plain} = file:read_file(PlainF)
+      end, [sha512, sha256, sha384]),
+    {ok, Signed3} = ecms:sign(Plain, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    ok = file:write_file(SignedF, Signed3),
+    cms_verify(SignedF, PlainF, ["-CAfile", SelfS0]),
+    {ok, Plain} = file:read_file(PlainF).
+
+sign_chain(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [PlainF, SignedF] = [filename:join(PrivD, V) || V <- ["plain", "signed"]],
+    [Leaf0, Im0, Policy0] = [filename:join(DataD, V) ||
+				V <- ["leaf0.pem", "0Im.pem", "0Policy.pem"]],
+    Plain = testinput(),
+    {ok, Signed} = ecms:sign(Plain, #{ digest_type => sha512,
+				       included_certs => [der_cert_of_pem(Im0)],
+				       signers => [der_cert_and_key_of_pem(Leaf0)]
+				     }),
+    ok = file:write_file(SignedF, Signed),
+    cms_verify(SignedF, PlainF, ["-CAfile", Policy0]),
+    {ok, Plain} = file:read_file(PlainF).
+
+sign_fail(_Config) ->
+    {error, _} = ecms:sign(<<>>, #{signers => [{<<>>, <<>>}]}),
+    {error, _} = ecms:sign(<<>>, #{resign => true, signers => [{<<>>, <<>>}]}).
 
 verify(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -119,6 +178,10 @@ spwn1(Port, SoFar) ->
 	    {ExitCode, lists:flatten(SoFar)}
     end.
 
+der_cert_and_key_of_pem(PemFile) ->
+    {der_cert_of_pem(PemFile), der_key_of_pem(PemFile)}.
+
+der_key_of_pem(PemFile) -> der_of_pem('PrivateKeyInfo', PemFile).
 der_cert_of_pem(PemFile) -> der_of_pem('Certificate', PemFile).
 
 der_of_pem(K, PemFile) ->
