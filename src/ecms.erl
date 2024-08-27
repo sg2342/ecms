@@ -5,7 +5,12 @@ Implementation of (parts of) RFC 5652 Cryptographic Message Syntax (CMS)
 
 -export([verify/2, sign/2, sign/3]).
 
+-export([decrypt/3]).
+
+-compile({nowarn_deprecated_function, [{public_key, decrypt_private, 3}]}).
+
 -include_lib("public_key/include/public_key.hrl").
+
 
 -doc """
 Sign `Data` using `SignCert` and `SignKey`
@@ -31,11 +36,11 @@ sign `Data`
 		    }) ->
 	  {ok, Signed :: binary()} | {error, _}.
 sign(Data, Opts) when is_map(Opts) ->
-	sign1(Data,
-	      maps:merge(#{ digest_type => sha256,
-			    singning_time => {date(), time()},
-			    resign => false,
-			    included_certs => [] }, Opts)).
+    sign1(Data,
+	  maps:merge(#{ digest_type => sha256,
+			singning_time => {date(), time()},
+			resign => false,
+			included_certs => [] }, Opts)).
 
 sign1(InDER, #{ resign := true, included_certs := IncludedCerts0 } = Opts0) ->
     IdSignedData = 'CMS':'id-signedData'(),
@@ -70,7 +75,7 @@ sign2(Content, SignerInfos0, DigestAlgorithms0, Crls,
 	{ok, ContentTypeDER} = 'CMS':encode('ContentType', 'CMS':'id-data'()),
 	{ok, MessageDigestDER} = 'CMS':encode('Digest', ContentDigest),
 	{ok, SigningTimeDER} = 'CMS':encode('SigningTime',
-					{generalTime, fmt_datetime(SigningTime)}),
+					    {generalTime, fmt_datetime(SigningTime)}),
 	SignedAttrs =
 	    [#{ attrType => 'CMS':'id-contentType'(),
 		attrValues => [ContentTypeDER] },
@@ -152,6 +157,179 @@ fmt_datetime({{Year, Month, Day}, {Hour, Minute, Second}}) ->
 				[Year, Month, Day, Hour, Minute, Second])).
 
 -doc """
+Decrypt CMS binary
+""".
+-spec decrypt(Encrypted :: binary(), RecipientCert :: public_key:der_encoded(),
+	      RecipientKey :: public_key:der_encoded()) ->
+	  {ok, Decrypted :: binary()} | {error, _}.
+decrypt(Encrypted, RecipientCert, RecipientKey) ->
+    IdEnvelopedData = 'CMS':'id-envelopedData'(),
+    IdCtAuthEnvelopedData = 'CMS':'id-ct-authEnvelopedData'(),
+    case 'CMS':decode('ContentInfo', Encrypted) of
+	{ok, #{ contentType := IdEnvelopedData, content := Content }} ->
+	    decrypt_envl(Content, RecipientCert, RecipientKey);
+	{ok, #{ contentType := IdCtAuthEnvelopedData, content := Content }} ->
+	    decrypt_auth(Content, RecipientCert, RecipientKey);
+	{error, _} = E -> E
+    end.
+
+decrypt_envl(Content, RecipientCertDER, RecipientKeyDER) ->
+    IdData = 'CMS':'id-data'(),
+    maybe
+	{ok, #{ %% version := Version,
+		recipientInfos := RecipientInfos,
+		encryptedContentInfo :=
+		    #{ contentType := IdData,
+		       contentEncryptionAlgorithm :=
+			   #{ algorithm := Algorithm,
+			      parameters := <<4, 16, IV/binary>> },
+		       encryptedContent := EncryptedContent }}} ?=
+	    'CMS':decode('EnvelopedData', Content),
+	Cipher = id2atom(Algorithm),
+	#{key_length := KeyLength, block_size := BlockSize} =
+	    crypto:cipher_info(Cipher),
+	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER,
+			 RecipientKeyDER, KeyLength),
+	{ok, unpad(crypto:crypto_one_time(Cipher, CEK, IV, EncryptedContent, false),
+		   BlockSize)}
+    else {error, _} = E -> E end.
+
+decrypt_auth(Content, RecipientCertDER, RecipientKeyDER) ->
+    IdData = 'CMS':'id-data'(),
+    maybe
+	{ok, #{ version := v0,
+		recipientInfos := RecipientInfos,
+		mac := MAC,
+		authEncryptedContentInfo :=
+		    #{ contentType := IdData,
+		       contentEncryptionAlgorithm :=
+			   #{ algorithm := Algorithm,
+			      parameters := Parameters },
+		       encryptedContent := EncryptedContent } } = M } ?=
+	    'CMS':decode('AuthEnvelopedData', Content),
+	Cipher = id2atom(Algorithm),
+	MAClen = byte_size(MAC),
+	{ok, #{'aes-nonce' := Nonce, 'aes-ICVlen' := MAClen}} ?=
+	    'CMS':decode('GCMParameters', Parameters),
+	#{ key_length := KeyLength } = crypto:cipher_info(Cipher),
+	{ok, CEK} = cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength),
+	{ok, AAD} =
+	    case maps:is_key(authAttrs, M) of
+		false -> {ok, <<>>};
+		true -> 'CMS':encode('AuthAttributes', maps:get(authAttrs, M))
+	    end,
+	case crypto:crypto_one_time_aead(Cipher, CEK, Nonce, EncryptedContent,
+					 AAD, MAC, false) of
+	    error -> {error, aead_decrypt_failed};
+	    Plain -> {ok, Plain}
+	end
+    else {error, _} = E -> E end.
+
+cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength) ->
+    {IaS, SkI} = cert_ias_and_ski(RecipientCertDER),
+    RecipientKey = public_key:der_decode('PrivateKeyInfo', RecipientKeyDER),
+    case from_kari_or_ktri(IaS, SkI, RecipientInfos) of
+	{ok, {OriginatorKey, Ukm, KeyEncryptionAlgorithm,
+	      KeyEncryptionParameters, EncryptedKey}} ->
+	    cec_ec(OriginatorKey, Ukm, KeyEncryptionAlgorithm,
+		   KeyEncryptionParameters, EncryptedKey,
+		   RecipientKey, KeyLength);
+	{ok, {?'rsaEncryption', <<5, 0>>, EncryptedKey}} ->
+	    {ok, public_key:decrypt_private(EncryptedKey, RecipientKey, [])};
+	{ok, {?'id-RSAES-OAEP', ParametersDER, EncryptedKey}} ->
+	    MaybeParams =
+		'PKIX1-PSS-OAEP-Algorithms':decode('RSAES-OAEP-params',
+						   ParametersDER),
+	    cec_oaep(EncryptedKey, MaybeParams, RecipientKey);
+	{error, _} = E -> E
+    end.
+
+cec_oaep(_, {error, _} = E, _) -> E;
+cec_oaep(EncryptedKey, {ok, #{hashFunc := #{algorithm := AlgorithmId}}},
+	 RecipientKey) ->
+    Alg = id2atom(AlgorithmId),
+    Opts = [{rsa_padding, rsa_pkcs1_oaep_padding},
+	    {rsa_mgf1_md, Alg}, {rsa_oaep_md, Alg}],
+    {ok, public_key:decrypt_private(EncryptedKey, RecipientKey, Opts)}.
+
+cec_ec(OriginatorKey, Ukm, KeyEncryptionAlgorithm, KeyEncryptionParameters,
+       EncryptedKey, RecipientKey, KeyLength) ->
+    DhSinglePassStdDHSha224kdfScheme = 'CMS':'dhSinglePass-stdDH-sha224kdf-scheme'(),
+    DhSinglePassStdDHSha256kdfScheme = 'CMS':'dhSinglePass-stdDH-sha256kdf-scheme'(),
+    DhSinglePassStdDHSha384kdfScheme = 'CMS':'dhSinglePass-stdDH-sha384kdf-scheme'(),
+    DhSinglePassStdDHSha512kdfScheme = 'CMS':'dhSinglePass-stdDH-sha512kdf-scheme'(),
+    maybe
+	{ok, DigestType} ?= case KeyEncryptionAlgorithm of
+				DhSinglePassStdDHSha224kdfScheme -> {ok, sha224};
+				DhSinglePassStdDHSha256kdfScheme -> {ok, sha256};
+				DhSinglePassStdDHSha384kdfScheme -> {ok, sha384};
+				DhSinglePassStdDHSha512kdfScheme -> {ok, sha512};
+				_ -> {error, unsupported_key_encryption}
+			    end,
+	{ok, SharedInfo} ?= shared_info_der(bin2oid(KeyEncryptionParameters),
+					    Ukm, KeyLength),
+	Z = public_key:compute_key(#'ECPoint'{point = OriginatorKey}, RecipientKey),
+	KEK = x963_kdf(DigestType, Z, SharedInfo, KeyLength),
+	try
+	    {ok, rfc3394:unwrap(EncryptedKey, KEK)}
+	catch {error, iv_mismatch} = E0 -> E0 end
+    else {error, _} = E1 -> E1 end.
+
+from_kari_or_ktri(_, _, []) -> {error, no_matching_kari};
+from_kari_or_ktri(IssuerAndSerialNumber, _KeyId,
+		  [{ktri,
+		    #{ version := v0,
+		       keyEncryptionAlgorithm :=
+			   #{ algorithm := KeyEncryptionAlgorithm,
+			      parameters := KeyEncryptionParameters },
+		       encryptedKey := EncryptedKey,
+		       rid := IssuerAndSerialNumber
+		     } } | _]) ->
+    {ok, {KeyEncryptionAlgorithm, KeyEncryptionParameters, EncryptedKey}};
+from_kari_or_ktri(_IssuerAndSerialNumber, KeyId,
+		  [{ktri,
+		    #{ version := v2,
+		       keyEncryptionAlgorithm :=
+			   #{ algorithm := KeyEncryptionAlgorithm,
+			      parameters := KeyEncryptionParameters },
+		       encryptedKey := EncryptedKey,
+		       rid := KeyId
+		     } } | _]) ->
+    {ok, {KeyEncryptionAlgorithm, KeyEncryptionParameters, EncryptedKey}};
+from_kari_or_ktri(IssuerAndSerialNumber, KeyId, [{ktri, _} | T]) ->
+    from_kari_or_ktri(IssuerAndSerialNumber, KeyId, T);
+from_kari_or_ktri(IssuerAndSerialNumber, KeyId,
+		  [{kari,
+		    #{version := v3,
+		      keyEncryptionAlgorithm :=
+			  #{ algorithm := KeyEncryptionAlgorithm,
+			     parameters := KeyEncryptionParameters },
+		      originator :=
+			  {originatorKey,
+			   #{ algorithm :=
+				  #{ algorithm := ?'id-ecPublicKey' },
+			      publicKey := OriginatorKey } },
+		      recipientEncryptedKeys := RecipientEncryptedKeys
+		     } = Kari} | T]) ->
+    Ukm = case maps:is_key(ukm, Kari) of
+	      false -> false;
+	      true -> maps:get(ukm, Kari) end,
+    case rek(IssuerAndSerialNumber, KeyId, RecipientEncryptedKeys) of
+	false ->  from_kari_or_ktri(IssuerAndSerialNumber, KeyId, T);
+	#{ encryptedKey := EncryptedKey } ->
+	    {ok, {OriginatorKey, Ukm, KeyEncryptionAlgorithm,
+		  KeyEncryptionParameters, EncryptedKey}}
+    end.
+
+rek(IssuerAndSerialNumber, {_, KeyId}, RecipientEncryptedKeys) ->
+    case lists:search(
+	   fun (#{rid := {rKeyId, #{subjectKeyIdentifier := Id}}}) ->
+		   Id == KeyId;
+	       (#{rid := IaS}) ->
+		   IaS == IssuerAndSerialNumber end, RecipientEncryptedKeys) of
+	{value, V} -> V; false -> false end.
+
+-doc """
 Verify CMS DER binary `InDER`
 """.
 -spec verify(InDER :: public_key:der_encoded(),
@@ -188,7 +366,7 @@ verify(InDER, Trusted) ->
 		     signature := Signature} = SignerInfo,
 		   Key}) ->
 		      maybe
-			  DigestType = digest_type(DigestAlgOID),
+			  DigestType = id2atom(DigestAlgOID),
 			  {ok, Digest} ?= digest(SignerInfo, DigestType, EContent),
 			  public_key:verify({digest, Digest}, DigestType,
 					    Signature, Key)
@@ -201,11 +379,6 @@ included_certificates(#{certificates := [_ | _] = Certs}) ->
     {_, L} = lists:unzip(L0),
     lists:usort(L);
 included_certificates(_) -> [].
-
-digest_type(?'id-sha512') -> sha512;
-digest_type(?'id-sha384') -> sha384;
-digest_type(?'id-sha256') -> sha256;
-digest_type(?'id-sha224') -> sha224.
 
 digest(#{ signedAttrs := SignedAttrs }, DigestType, SignedData) ->
     Digest = crypto:hash(DigestType, SignedData),
@@ -277,3 +450,47 @@ build_chain([Cert | _] = Chain, Certs) ->
 	   fun(C) -> public_key:pkix_is_issuer(Cert, C) end, Certs) of
 	[] -> Chain;
 	[IM] -> build_chain([IM | Chain], Certs -- [IM]) end.
+
+x963_kdf(Hash, Key, Info, Length) ->
+    #{ size := Size } = crypto:hash_info(Hash),
+    Bin = << <<(crypto:hash(Hash, <<Key/binary, I:32, Info/binary>>))/binary >>
+	     || I <- lists:seq(1, ceil(Length / Size)) >>,
+    binary:part(Bin, 0, Length).
+
+shared_info_der(WrapAlg, Ukm, KeyLength) ->
+    SharedInfo0 = #{ keyInfo => #{ algorithm => WrapAlg },
+		     suppPubInfo => <<(KeyLength * 8):32>> },
+    SharedInfo  = case Ukm of
+		      false -> SharedInfo0;
+		      V -> SharedInfo0#{ entityUInfo => V } end,
+    'CMS':encode('ECC-CMS-SharedInfo', SharedInfo).
+
+unpad(Data, 1) -> Data;
+unpad(Data, N) ->
+    SLen = ((erlang:byte_size(Data) div N) - 1) * N,
+    <<S:SLen/binary, E/binary>> = Data,
+    <<_:15/binary, Pad>> = E,
+    RLen = N - Pad,
+    <<R:RLen/binary, _/binary>> = E,
+    <<S/binary, R/binary>>.
+
+id2atom(?'id-sha512') -> sha512;
+id2atom(?'id-sha384') -> sha384;
+id2atom(?'id-sha256') -> sha256;
+id2atom(?'id-sha224') -> sha224;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 3}) ->  aes_128_ofb;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 23}) -> aes_192_ofb;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 43}) -> aes_256_ofb;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 4}) ->  aes_128_cfb128;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 24}) -> aes_192_cfb128;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 44}) -> aes_256_cfb128;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 6}) -> aes_128_gcm;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 26}) -> aes_192_gcm;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 46}) -> aes_256_gcm;
+id2atom(?'id-aes128-CBC') -> aes_128_cbc;
+id2atom(?'id-aes192-CBC') -> aes_192_cbc;
+id2atom(?'id-aes256-CBC') -> aes_256_cbc.
+
+bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 45>>) -> ?'id-aes256-wrap';
+bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 25>>) -> ?'id-aes192-wrap';
+bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 5>>) -> ?'id-aes128-wrap'.

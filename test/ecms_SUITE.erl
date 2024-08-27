@@ -6,10 +6,84 @@
 
 -export([sign/1, sign_chain/1, sign_fail/1]).
 
+-export([decrypt_ec/1, decrypt_rsa/1, decrypt_keyid/1]).
+
+
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
-     sign, sign_chain, sign_fail
+     sign, sign_chain, sign_fail,
+     decrypt_ec, decrypt_rsa, decrypt_keyid
     ].
+
+supported_ciphers_and_hashes() ->
+    [{"-aes-" ++ integer_to_list(KS) ++ "-" ++ atom_to_list(M),
+      atom_to_list(H)} ||
+	KS <- [128, 192, 256],
+	M <- [ofb, cbc, gcm, cfb],
+	H <- [sha224, sha256, sha384, sha512]].
+
+decrypt_rsa(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    Rsa1 = filename:join(DataD, "smrsa1.pem"),
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    lists:foreach(
+      fun({Cipher, Hash}) ->
+	      cms_encrypt(PlainF, EncryptedF,
+			  [Cipher, "-recip", Rsa1,
+			   "-keyopt", "rsa_padding_mode:oaep",
+			   "-keyopt", "rsa_oaep_md:" ++ Hash]),
+	      {ok, Encrypted} = file:read_file(EncryptedF),
+	      cms_decrypt(EncryptedF, PlainF, Rsa1),
+	      {ok, Plain} = file:read_file(PlainF),
+	      {ok, Plain} =
+		  ecms:decrypt(Encrypted, der_cert_of_pem(Rsa1),
+			       der_key_of_pem(Rsa1)) end,
+      supported_ciphers_and_hashes()).
+
+decrypt_ec(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    SelfS0 = filename:join(DataD, "selfs0.pem"),
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    lists:foreach(
+      fun({Cipher, Hash}) ->
+	      cms_encrypt(PlainF, EncryptedF,
+			  [Cipher, "-recip", SelfS0,
+			   "-keyopt", "ecdh_kdf_md:" ++ Hash]),
+	      {ok, Encrypted} = file:read_file(EncryptedF),
+	      {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0),
+					 der_key_of_pem(SelfS0)) end,
+      supported_ciphers_and_hashes()).
+
+decrypt_keyid(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [SelfS0, SelfS1, Rsa1, Rsa2] = Recipients =
+	[filename:join(DataD, V) ||
+	    V <- ["selfs0.pem", "selfs1.pem", "smrsa1.pem", "smrsa2.pem"]],
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_encrypt(PlainF, EncryptedF,
+		["-aes-256-gcm", "-recip", SelfS0, "-keyopt", "ecdh_kdf_md:sha224",
+		 "-recip", SelfS1, "-keyopt", "ecdh_kdf_md:sha384",
+		 "-recip", Rsa1,
+		 "-recip", Rsa2, "-keyopt", "rsa_padding_mode:oaep",
+		 "-keyopt", "rsa_oaep_md:sha512", "-keyid"]),
+    {ok, Encrypted} = file:read_file(EncryptedF),
+    lists:foreach(
+      fun(Recipient) ->
+	      cms_decrypt(EncryptedF, PlainF, Recipient),
+	      {ok, Plain} = file:read_file(PlainF),
+	      {ok, Plain} =
+		  ecms:decrypt(Encrypted, der_cert_of_pem(Recipient),
+			       der_key_of_pem(Recipient))
+      end, Recipients).
 
 sign(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -17,8 +91,8 @@ sign(Config) ->
 	[filename:join(PrivD, V) || V <- ["plain", "signed", "resigned"]],
     [Dsa1, Dsa2, Ec1, Ec2, Rsa1, Rsa2, SelfS0, SmRoot] =
 	[filename:join(DataD, V) ||
-	V <- ["smdsa1.pem", "smdsa2.pem", "smec1.pem", "smec2.pem",
-	      "smrsa1.pem", "smrsa2.pem", "selfs0.pem", "smroot.pem"]],
+	    V <- ["smdsa1.pem", "smdsa2.pem", "smec1.pem", "smec2.pem",
+		  "smrsa1.pem", "smrsa2.pem", "selfs0.pem", "smroot.pem"]],
     Plain = testinput(),
     {ok, Signed} = ecms:sign(Plain,
 			     #{ digest_type => sha224,
@@ -160,6 +234,14 @@ cms_sign(Plain, Signed, Tail) ->
 cms_verify(Signed, Plain, Tail) ->
     {0, _} = spwn(["openssl", "cms", "-verify",
 		   "-inform", "DER", "-in", Signed, "-out", Plain | Tail]).
+
+cms_encrypt(Plain, Encrypted, Tail) ->
+    {0, _} = spwn(["openssl", "cms", "-encrypt", "-binary", "-in", Plain,
+		   "-outform", "DER", "-out", Encrypted | Tail]).
+
+cms_decrypt(Encrypted, Plain, Recip) ->
+    {0, _} = spwn(["openssl", "cms", "-decrypt", "-inform", "DER",
+		   "-in", Encrypted, "-out", Plain, "-recip", Recip]).
 
 -spec spwn([string()]) -> {ExitCode :: integer(), string()}.
 spwn([Arg0 | Args]) ->

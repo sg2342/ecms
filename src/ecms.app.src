@@ -7,10 +7,11 @@
     stdlib,
     public_key,
     asn1,
-    crypto
+    crypto,
+    rfc3394
    ]},
   {env,[]},
-  {modules, [ecms, 'CMS', 'PKIX1Explicit88']},
+  {modules, [ecms, 'CMS', 'PKIX1Explicit88', 'PKIX1-PSS-OAEP-Algorithms']},
 
   {licenses, ["Apache-2.0"]},
   {links, []}
