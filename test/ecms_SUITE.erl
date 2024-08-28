@@ -240,10 +240,12 @@ verify_pss(Config) ->
 verify_fail(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
     [PlainF, SignedF] = [filename:join(PrivD, V) || V <- ["plain", "signed"]],
-    [Leaf0, Im0, Policy0, Policy1, SpecialF, Selfsigned, ManipulatedContentF] =
+    [Leaf0, Im0, Policy0, Policy1, SpecialF, Selfsigned, ManipulatedContentF,
+     InvalidPssF, Rsa1] =
 	[filename:join(DataD, V) ||
 	    V <- ["leaf0.pem", "0Im.pem", "0Policy.pem", "1Policy.pem",
-		  "selfsigned_special.c", "selfsigned.c", "manipulated_content"]],
+		  "selfsigned_special.c", "selfsigned.c", "manipulated_content",
+		  "invalid_pss", "smrsa1.pem"]],
     Plain = testinput(),
     ok = file:write_file(PlainF, Plain),
     cms_sign(PlainF, SignedF, ["-md", "sha512", "-keyid", "-signer", Leaf0,
@@ -254,11 +256,11 @@ verify_fail(Config) ->
 					   der_cert_of_pem(Policy1)]),
     {ok, ManipulatedContent} = file:read_file(ManipulatedContentF),
     {error, verify} = ecms:verify(ManipulatedContent,
-				  [der_cert_of_pem(Selfsigned)]).
+				  [der_cert_of_pem(Selfsigned)]),
+    {ok, InvalidPss} = file:read_file(InvalidPssF),
+    {error, verify} = ecms:verify(InvalidPss, [der_cert_of_pem(Rsa1)]).
 
-
-testinput() -> <<"fooobar">>.
-
+testinput() -> crypto:strong_rand_bytes(rand:uniform(321)).
 
 cms_resign(Signed, Resigned, Tail) ->
     {0, _} = spwn(["openssl", "cms", "-resign", "-nodetach", "-nosmimecap",

@@ -118,10 +118,10 @@ sign3([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInfos0) ->
 	{ok, #{ tbsCertificate := TbsCertificate }}
 	    ?= 'PKIX1Explicit88':decode('Certificate', CertDER),
 	Key = public_key:der_decode('PrivateKeyInfo', KeyDER),
-	{DigestAlgorithm, SignatureAlgorithm} =
+	{DigestAlgorithm, {SignatureAlgorithm, Opts}} =
 	    sign_algs(DigestType, Key),
 	IaS = maps:with([serialNumber, issuer], TbsCertificate),
-	Signature = public_key:sign({digest, Digest}, DigestType, Key),
+	Signature = public_key:sign({digest, Digest}, DigestType, Key, Opts),
 	Si = #{ version => v1,
 		sid => {issuerAndSerialNumber, IaS},
 		digestAlgorithm => DigestAlgorithm,
@@ -494,7 +494,7 @@ verify(InDER, Trusted) ->
 		      signature := Signature } = SignerInfo,
 		   Key}) ->
 		      maybe
-			  {ok, Opts} = pk_verify_opts(SignatureAlgorithm),
+			  {ok, Opts} ?= pk_verify_opts(SignatureAlgorithm),
 			  DigestType = oid(DigestAlgOID),
 			  {ok, Digest} ?= digest(SignerInfo, DigestType, EContent),
 			  public_key:verify({digest, Digest}, DigestType,
@@ -513,7 +513,7 @@ pk_verify_opts(#{ algorithm := ?'id-RSASSA-PSS', parameters := Parameters}) ->
     maybe
 	{ok, #{ maskGenAlgorithm := #{ algorithm := ?'id-mgf1',
 				       parameters := MgParameters},
-		saltLength := SaltLength}} ?=
+		saltLength := SaltLength }} ?=
 	    'PKIX1-PSS-OAEP-Algorithms':decode('RSASSA-PSS-params', Parameters),
 	{ok, #{ algorithm := AlgOId }} ?=
 	    'PKIX1-PSS-OAEP-Algorithms':decode('MaskGenAlgorithm', MgParameters),
@@ -666,13 +666,25 @@ bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 5>>) -> ?'id-aes128-wrap'.
 
 sign_algs(H, K) -> { #{ algorithm => oid(H) }, sign_algs1(H, K) }.
 
-sign_algs1(sha512, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha512' };
-sign_algs1(sha384, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha384' };
-sign_algs1(sha256, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha256' };
-sign_algs1(sha224, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha224' };
-sign_algs1(sha512, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA512' };
-sign_algs1(sha384, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA384' };
-sign_algs1(sha256, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA256' };
-sign_algs1(sha224, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA224' };
-sign_algs1(_, #'RSAPrivateKey'{}) ->
-    #{ algorithm => ?'rsaEncryption', parameters => <<5, 0>> }.
+sign_algs1(sha512, #'DSAPrivateKey'{}) -> {#{ algorithm => ?'id-dsa-with-sha512' }, []};
+sign_algs1(sha384, #'DSAPrivateKey'{}) -> {#{ algorithm => ?'id-dsa-with-sha384' }, []};
+sign_algs1(sha256, #'DSAPrivateKey'{}) -> {#{ algorithm => ?'id-dsa-with-sha256' }, []};
+sign_algs1(sha224, #'DSAPrivateKey'{}) -> {#{ algorithm => ?'id-dsa-with-sha224' }, []};
+sign_algs1(sha512, #'ECPrivateKey'{}) -> {#{ algorithm => ?'ecdsa-with-SHA512' }, []};
+sign_algs1(sha384, #'ECPrivateKey'{}) -> {#{ algorithm => ?'ecdsa-with-SHA384' }, []};
+sign_algs1(sha256, #'ECPrivateKey'{}) -> {#{ algorithm => ?'ecdsa-with-SHA256' }, []};
+sign_algs1(sha224, #'ECPrivateKey'{}) -> {#{ algorithm => ?'ecdsa-with-SHA224' }, []};
+sign_algs1(H, #'RSAPrivateKey'{}) ->
+    #{ size := SaltLength } = crypto:hash_info(H),
+    Opts = [{rsa_padding, rsa_pkcs1_pss_padding},
+	    {rsa_mgf1_md, H},
+	    {rsa_pss_saltlen, SaltLength}],
+    Alg = #{ algorithm => oid(H), parameters => <<5, 0>> },
+    {ok, MgParameters} = 'PKIX1-PSS-OAEP-Algorithms':encode('MaskGenAlgorithm', Alg),
+    Parameters = #{ hashAlgorithm => Alg,
+		    maskGenAlgorithm =>
+			#{ algorithm => ?'id-mgf1', parameters => MgParameters },
+		    saltLength => SaltLength, trailerField => 1 },
+    {ok, ParametersDER } =
+	'PKIX1-PSS-OAEP-Algorithms':encode('RSASSA-PSS-params', Parameters),
+    { #{ algorithm =>  ?'id-RSASSA-PSS', parameters => ParametersDER }, Opts}.
