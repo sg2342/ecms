@@ -5,9 +5,11 @@ Implementation of (parts of) RFC 5652 Cryptographic Message Syntax (CMS)
 
 -export([verify/2, sign/2, sign/3]).
 
--export([decrypt/3]).
+-export([decrypt/3, encrypt/3, encrypt/2]).
 
--compile({nowarn_deprecated_function, [{public_key, decrypt_private, 3}]}).
+-compile({nowarn_deprecated_function, [{public_key, decrypt_private, 3},
+				       {public_key, encrypt_public, 3}]}).
+
 
 -include_lib("public_key/include/public_key.hrl").
 
@@ -155,6 +157,153 @@ sign_algs1(_, #'RSAPrivateKey'{}) ->
 fmt_datetime({{Year, Month, Day}, {Hour, Minute, Second}}) ->
     lists:flatten(io_lib:format("~w~2..0w~2..0w~2..0w~2..0w~2..0wZ",
 				[Year, Month, Day, Hour, Minute, Second])).
+
+-doc """
+Encrypt `Data` to `Recipients`
+""".
+-spec encrypt(Data :: binary(),
+	      Recipients :: [Certificate :: public_key:der_encoded()]) ->
+	  {ok, Encrypted :: binary()} | {error, _}.
+encrypt(Data, Recipients) ->
+    encrypt(Data, Recipients, #{ digest_type => sha256, cipher => aes_256_cbc }).
+
+-doc """
+Encrypt `Data` to `Recipients`
+""".
+-spec encrypt(Data :: binary(),
+	      Recipients :: [Certificate :: public_key:der_encoded()],
+	      Opts :: #{ digest_type => crypto:sha2(),
+			 auth_attrs => [#{attrType := tuple(), attrValues := [binary()]}],
+			 cipher =>  aes_128_ofb |  aes_192_ofb |  aes_256_ofb |
+			 aes_128_cfb128 | aes_192_cfb128 |  aes_256_cfb128 |
+			 aes_128_cbc |  aes_192_cbc | aes_256_cbc |
+			 aes_128_gcm | aes_192_gcm | aes_256_gcm }) ->
+	  {ok, Encrypted :: binary()} | {error, _}.
+encrypt(Data, Recipients, Opts0) ->
+    Opts = maps:merge(#{ digest_type=> sha256,
+			 cipher => aes_256_cbc }, Opts0),
+    encrypt1(Data, Recipients, Opts).
+
+encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType} = Opts)
+  when Cipher =:= aes_128_gcm ; Cipher =:= aes_192_gcm ; Cipher =:= aes_256_gcm ->
+    #{ key_length := KeyLength, iv_length := IvLength } =
+	crypto:cipher_info(Cipher),
+    <<CEK:KeyLength/binary, IV:IvLength/binary>> =
+	crypto:strong_rand_bytes(KeyLength + IvLength),
+    MAClen = 16,
+    {M0, AAD} =
+	case maps:is_key(auth_attrs, Opts) of
+	    false -> {#{}, <<>>};
+	    true ->
+		AAttrs = maps:get(auth_attrs, Opts),
+		{ok, AuthAttrsDER} = 'CMS':encode('AuthAttributes', AAttrs),
+		{ #{ authAttrs => AAttrs }, AuthAttrsDER }
+	end,
+    {EncryptedContent, MAC} =
+	crypto:crypto_one_time_aead(Cipher, CEK, IV, Data, AAD, MAClen, true),
+    RecipientInfos = [ kari_or_ktri(CEK, KeyLength, DigestType, Cert) ||
+			 Cert <- Recipients ],
+    {ok, Parameters} =
+	'CMS':encode('GCMParameters',
+		     #{'aes-nonce' => IV, 'aes-ICVlen' => MAClen}),
+    AuthEnvelopedData =
+	M0#{ version => v0,
+	     recipientInfos => RecipientInfos,
+	     mac => MAC,
+	     authEncryptedContentInfo =>
+		 #{ contentType => 'CMS':'id-data'(),
+		    contentEncryptionAlgorithm =>
+			#{ algorithm => atom2id(Cipher), parameters => Parameters},
+		    encryptedContent => EncryptedContent
+		  } },
+    {ok, AuthEnvelopedDataDER} = 'CMS':encode('AuthEnvelopedData', AuthEnvelopedData),
+    'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-ct-authEnvelopedData'(),
+				   content => AuthEnvelopedDataDER });
+encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType}) ->
+    #{ key_length := KeyLength, block_size := BlockSize, iv_length := IvLength } =
+	crypto:cipher_info(Cipher),
+    <<CEK:KeyLength/binary, IV:IvLength/binary>> =
+	crypto:strong_rand_bytes(KeyLength + IvLength),
+    EncryptedContent =
+	crypto:crypto_one_time(Cipher, CEK, IV, pad(Data, BlockSize), true),
+    RecipientInfos = [ kari_or_ktri(CEK, KeyLength, DigestType, Cert)  ||
+			 Cert <- Recipients ],
+    EnvelopedData =
+	#{ version => v2,
+	   recipientInfos => RecipientInfos,
+	   encryptedContentInfo =>
+	       #{ contentType => 'CMS':'id-data'(),
+		  contentEncryptionAlgorithm =>
+		      #{ algorithm => atom2id(Cipher),
+			 parameters => <<4, IvLength, IV/binary>>},
+		  encryptedContent => EncryptedContent } },
+    {ok, EnvelopedDataDER} = 'CMS':encode('EnvelopedData', EnvelopedData),
+    'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-envelopedData'(),
+				   content => EnvelopedDataDER}).
+
+kari_or_ktri(CEK, KeyLength, DigestType, Cert) ->
+    case cert_public_key(Cert) of
+	#'RSAPublicKey'{} = RsaPub ->
+	    ktri(CEK, DigestType, RsaPub, cert_ias_and_ski(Cert));
+	{#'ECPoint'{}, _} = EcPub ->
+	    kari(CEK, DigestType, EcPub, cert_ias_and_ski(Cert), KeyLength)
+    end.
+
+ktri(CEK, DigestType, RsaPub, {IaS, SkI}) ->
+    {RId, Version} = case SkI of {_, false} -> {IaS, v0}; _ -> {SkI, v2} end,
+    Alg = #{ algorithm => atom2id(DigestType) },
+    {ok, MaskGenP} = 'PKIX1-PSS-OAEP-Algorithms':encode('MaskGenAlgorithm', Alg),
+    KeyEncryptionParameters =
+	#{ hashFunc => Alg,
+	   maskGenFunc => #{ algorithm => 'PKIX1-PSS-OAEP-Algorithms':'id-mgf1'(),
+			     parameters => MaskGenP } },
+    Opts = [{rsa_padding, rsa_pkcs1_oaep_padding},
+	    {rsa_mgf1_md, DigestType}, {rsa_oaep_md, DigestType}],
+    EncryptedKey = public_key:encrypt_public(CEK, RsaPub, Opts),
+    {ok, KeyEncryptionParametersDER} =
+	'PKIX1-PSS-OAEP-Algorithms':encode('RSAES-OAEP-params', KeyEncryptionParameters),
+    {ktri,
+     #{ version => Version,
+	keyEncryptionAlgorithm => #{ algorithm => ?'id-RSAES-OAEP',
+				     parameters => KeyEncryptionParametersDER },
+	rid => RId,
+	encryptedKey => EncryptedKey }}.
+
+kari(CEK, DigestType, {EcPub, EcParameters}, {IaS, SkI}, KeyLength) ->
+    RId = case SkI of
+	      {_, false} -> IaS;
+	      {_, Id} -> {rKeyId, #{subjectKeyIdentifier => Id}} end,
+    Algorithm = case DigestType of
+		    sha224 -> 'CMS':'dhSinglePass-stdDH-sha224kdf-scheme'();
+		    sha256 -> 'CMS':'dhSinglePass-stdDH-sha256kdf-scheme'();
+		    sha384 -> 'CMS':'dhSinglePass-stdDH-sha384kdf-scheme'();
+		    sha512 -> 'CMS':'dhSinglePass-stdDH-sha512kdf-scheme'()
+		end,
+    Parameters =
+	case KeyLength of
+	    32 -> <<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 45>>; % aes256-wrap
+	    24 -> <<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 25>>; % aes192-wrap
+	    16 -> <<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 5>>   % aes128-wrap
+	end,
+    Ukm = crypto:strong_rand_bytes(42),
+    {ok, SharedInfo} = shared_info_der(bin2oid(Parameters), Ukm, KeyLength),
+    #'ECPrivateKey'{ publicKey = OriginatorKey } = EcPriv =
+	public_key:generate_key(EcParameters),
+    Z = public_key:compute_key(EcPub, EcPriv),
+    KEK = x963_kdf(DigestType, Z, SharedInfo, KeyLength),
+    RecipientEncryptedKeys =
+	[#{encryptedKey => rfc3394:wrap(CEK, KEK),
+	   rid => RId }],
+    {kari,
+     #{ version => v3,
+	originator =>
+	    {originatorKey,
+	     #{ algorithm => #{ algorithm => ?'id-ecPublicKey' },
+		publicKey => OriginatorKey }},
+	ukm => Ukm,
+	keyEncryptionAlgorithm =>
+	    #{ algorithm => Algorithm, parameters => Parameters },
+	recipientEncryptedKeys => RecipientEncryptedKeys }}.
 
 -doc """
 Decrypt CMS binary
@@ -465,6 +614,11 @@ shared_info_der(WrapAlg, Ukm, KeyLength) ->
 		      V -> SharedInfo0#{ entityUInfo => V } end,
     'CMS':encode('ECC-CMS-SharedInfo', SharedInfo).
 
+pad(Data, 1) -> Data;
+pad(Data, N) ->
+    Pad = N - (erlang:byte_size(Data) rem N),
+    <<Data/binary, (binary:copy(<<Pad>>, Pad))/binary>>.
+
 unpad(Data, 1) -> Data;
 unpad(Data, N) ->
     SLen = ((erlang:byte_size(Data) div N) - 1) * N,
@@ -484,12 +638,30 @@ id2atom({2, 16, 840, 1, 101, 3, 4, 1, 43}) -> aes_256_ofb;
 id2atom({2, 16, 840, 1, 101, 3, 4, 1, 4}) ->  aes_128_cfb128;
 id2atom({2, 16, 840, 1, 101, 3, 4, 1, 24}) -> aes_192_cfb128;
 id2atom({2, 16, 840, 1, 101, 3, 4, 1, 44}) -> aes_256_cfb128;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 6}) -> aes_128_gcm;
+id2atom({2, 16, 840, 1, 101, 3, 4, 1, 6}) ->  aes_128_gcm;
 id2atom({2, 16, 840, 1, 101, 3, 4, 1, 26}) -> aes_192_gcm;
 id2atom({2, 16, 840, 1, 101, 3, 4, 1, 46}) -> aes_256_gcm;
 id2atom(?'id-aes128-CBC') -> aes_128_cbc;
 id2atom(?'id-aes192-CBC') -> aes_192_cbc;
 id2atom(?'id-aes256-CBC') -> aes_256_cbc.
+
+atom2id(sha512) -> ?'id-sha512';
+atom2id(sha384) -> ?'id-sha384';
+atom2id(sha256) -> ?'id-sha256';
+atom2id(sha224) -> ?'id-sha224';
+atom2id(aes_128_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 3};
+atom2id(aes_192_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 23};
+atom2id(aes_256_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 43};
+atom2id(aes_128_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 4};
+atom2id(aes_192_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 24};
+atom2id(aes_256_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 44};
+atom2id(aes_128_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 6};
+atom2id(aes_192_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 26};
+atom2id(aes_256_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 46};
+atom2id(aes_128_cbc) -> ?'id-aes128-CBC';
+atom2id(aes_192_cbc) -> ?'id-aes192-CBC';
+atom2id(aes_256_cbc) -> ?'id-aes256-CBC'.
+
 
 bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 45>>) -> ?'id-aes256-wrap';
 bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 25>>) -> ?'id-aes192-wrap';

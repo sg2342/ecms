@@ -8,19 +8,44 @@
 
 -export([decrypt_ec/1, decrypt_rsa/1, decrypt_keyid/1]).
 
+-export([encrypt/1]).
+
 
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      sign, sign_chain, sign_fail,
-     decrypt_ec, decrypt_rsa, decrypt_keyid
+     decrypt_ec, decrypt_rsa, decrypt_keyid,
+     encrypt
     ].
 
-supported_ciphers_and_hashes() ->
-    [{"-aes-" ++ integer_to_list(KS) ++ "-" ++ atom_to_list(M),
-      atom_to_list(H)} ||
-	KS <- [128, 192, 256],
-	M <- [ofb, cbc, gcm, cfb],
-	H <- [sha224, sha256, sha384, sha512]].
+encrypt(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [SelfS0, Rsa1] = [filename:join(DataD, V) || V <- ["selfs0.pem", "smrsa1.pem"]],
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    L = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
+			 aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
+			 aes_128_cbc, aes_192_cbc, aes_256_cbc,
+			 aes_128_gcm, aes_192_gcm, aes_256_gcm],
+		   H <- [sha224, sha256, sha384, sha512]],
+    lists:foreach(
+      fun({C, H}) ->
+	      logger:notice(#{c => C, h => H}),
+	      {ok, Enrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS0),
+						    der_cert_of_pem(Rsa1)],
+					    #{cipher => C, digest_type => H}),
+	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(SelfS0),
+					 der_key_of_pem(SelfS0)),
+	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(Rsa1),
+					 der_key_of_pem(Rsa1)),
+	      ok = file:write_file(EncryptedF, Enrypted),
+	      cms_decrypt(EncryptedF, PlainF, SelfS0),
+	      {ok, Plain} = file:read_file(PlainF),
+	      cms_decrypt(EncryptedF, PlainF, Rsa1),
+	      {ok, Plain} = file:read_file(PlainF)
+      end, L).
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -239,9 +264,11 @@ cms_encrypt(Plain, Encrypted, Tail) ->
     {0, _} = spwn(["openssl", "cms", "-encrypt", "-binary", "-in", Plain,
 		   "-outform", "DER", "-out", Encrypted | Tail]).
 
-cms_decrypt(Encrypted, Plain, Recip) ->
+cms_decrypt(Encrypted, Plain, Recip) -> cms_decrypt(Encrypted, Plain, Recip, []).
+
+cms_decrypt(Encrypted, Plain, Recip, Tail) ->
     {0, _} = spwn(["openssl", "cms", "-decrypt", "-inform", "DER",
-		   "-in", Encrypted, "-out", Plain, "-recip", Recip]).
+		   "-in", Encrypted, "-out", Plain, "-recip", Recip | Tail]).
 
 -spec spwn([string()]) -> {ExitCode :: integer(), string()}.
 spwn([Arg0 | Args]) ->
@@ -270,3 +297,10 @@ der_of_pem(K, PemFile) ->
     {ok, Pem} = file:read_file(PemFile),
     {K, DER, not_encrypted} = lists:keyfind(K, 1, public_key:pem_decode(Pem)),
     DER.
+
+supported_ciphers_and_hashes() ->
+    [{"-aes-" ++ integer_to_list(KS) ++ "-" ++ atom_to_list(M),
+      atom_to_list(H)} ||
+	KS <- [128, 192, 256],
+	M <- [ofb, cbc, gcm, cfb],
+	H <- [sha224, sha256, sha384, sha512]].
