@@ -48,7 +48,7 @@ sign1(InDER, #{ resign := true, included_certs := IncludedCerts0 } = Opts0) ->
     IdSignedData = 'CMS':'id-signedData'(),
     IdData = 'CMS':'id-data'(),
     maybe
-	{ok, #{contentType := IdSignedData, content := SignedDataDER}} ?=
+	{ok, #{ contentType := IdSignedData, content := SignedDataDER }} ?=
 	    'CMS':decode('ContentInfo', InDER),
 	{ok, #{ encapContentInfo := #{ eContentType := IdData,
 				       eContent := Content },
@@ -89,7 +89,7 @@ sign2(Content, SignerInfos0, DigestAlgorithms0, Crls,
 	Digest = crypto:hash(DigestType, SignedAttrsDER),
 	{ok, SignerInfos} ?= sign3(Signers, Digest, DigestType, SignedAttrs, []),
 
-	DigestAlgorithms = lists:usort([A || #{digestAlgorithm := A} <- SignerInfos]
+	DigestAlgorithms = lists:usort([A || #{ digestAlgorithm := A } <- SignerInfos]
 				       ++ DigestAlgorithms0),
 
 	{CertsDER, _} = lists:unzip(Signers),
@@ -115,7 +115,7 @@ sign3([], _Digest, _DigestType, _SignedAttrs, SignerInfos) ->
     {ok, SignerInfos};
 sign3([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInfos0) ->
     maybe
-	{ok, #{tbsCertificate := TbsCertificate}}
+	{ok, #{ tbsCertificate := TbsCertificate }}
 	    ?= 'PKIX1Explicit88':decode('Certificate', CertDER),
 	Key = public_key:der_decode('PrivateKeyInfo', KeyDER),
 	{DigestAlgorithm, SignatureAlgorithm} =
@@ -132,25 +132,6 @@ sign3([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInfos0) ->
 	sign3(T, Digest, DigestType, SignedAttrs, [Si | SignerInfos0])
     end.
 
-
--define('id-dsa-with-sha512', {2, 16, 840, 1, 101, 3, 4, 3, 4}).
--define('id-dsa-with-sha384', {2, 16, 840, 1, 101, 3, 4, 3, 3}).
-
-sign_algs(sha512 = H, K) -> { #{algorithm => ?'id-sha512'}, sign_algs1(H, K) };
-sign_algs(sha384 = H, K) -> { #{algorithm => ?'id-sha384'}, sign_algs1(H, K) };
-sign_algs(sha256 = H, K) -> { #{algorithm => ?'id-sha256'}, sign_algs1(H, K) };
-sign_algs(sha224 = H, K) -> { #{algorithm => ?'id-sha224'}, sign_algs1(H, K) }.
-
-sign_algs1(sha512, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha512' };
-sign_algs1(sha384, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha384' };
-sign_algs1(sha256, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha256' };
-sign_algs1(sha224, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha224' };
-sign_algs1(sha512, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA512' };
-sign_algs1(sha384, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA384' };
-sign_algs1(sha256, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA256' };
-sign_algs1(sha224, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA224' };
-sign_algs1(_, #'RSAPrivateKey'{}) ->
-    #{ algorithm => ?'rsaEncryption', parameters => <<5, 0>> }.
 
 
 -spec fmt_datetime(calendar:datetime()) -> string().
@@ -173,7 +154,8 @@ Encrypt `Data` to `Recipients`
 -spec encrypt(Data :: binary(),
 	      Recipients :: [Certificate :: public_key:der_encoded()],
 	      Opts :: #{ digest_type => crypto:sha2(),
-			 auth_attrs => [#{attrType := tuple(), attrValues := [binary()]}],
+			 auth_attrs => [#{ attrType := tuple(),
+					   attrValues := [binary()] }],
 			 cipher =>  aes_128_ofb |  aes_192_ofb |  aes_256_ofb |
 			 aes_128_cfb128 | aes_192_cfb128 |  aes_256_cfb128 |
 			 aes_128_cbc |  aes_192_cbc | aes_256_cbc |
@@ -184,7 +166,7 @@ encrypt(Data, Recipients, Opts0) ->
 			 cipher => aes_256_cbc }, Opts0),
     encrypt1(Data, Recipients, Opts).
 
-encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType} = Opts)
+encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Opts)
   when Cipher =:= aes_128_gcm ; Cipher =:= aes_192_gcm ; Cipher =:= aes_256_gcm ->
     #{ key_length := KeyLength, iv_length := IvLength } =
 	crypto:cipher_info(Cipher),
@@ -213,13 +195,13 @@ encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType} = Opts
 	     authEncryptedContentInfo =>
 		 #{ contentType => 'CMS':'id-data'(),
 		    contentEncryptionAlgorithm =>
-			#{ algorithm => atom2id(Cipher), parameters => Parameters},
+			#{ algorithm => oid(Cipher), parameters => Parameters},
 		    encryptedContent => EncryptedContent
 		  } },
     {ok, AuthEnvelopedDataDER} = 'CMS':encode('AuthEnvelopedData', AuthEnvelopedData),
     'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-ct-authEnvelopedData'(),
 				   content => AuthEnvelopedDataDER });
-encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType}) ->
+encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType }) ->
     #{ key_length := KeyLength, block_size := BlockSize, iv_length := IvLength } =
 	crypto:cipher_info(Cipher),
     <<CEK:KeyLength/binary, IV:IvLength/binary>> =
@@ -234,7 +216,7 @@ encrypt1(Data, Recipients, #{cipher := Cipher, digest_type := DigestType}) ->
 	   encryptedContentInfo =>
 	       #{ contentType => 'CMS':'id-data'(),
 		  contentEncryptionAlgorithm =>
-		      #{ algorithm => atom2id(Cipher),
+		      #{ algorithm => oid(Cipher),
 			 parameters => <<4, IvLength, IV/binary>>},
 		  encryptedContent => EncryptedContent } },
     {ok, EnvelopedDataDER} = 'CMS':encode('EnvelopedData', EnvelopedData),
@@ -251,7 +233,7 @@ kari_or_ktri(CEK, KeyLength, DigestType, Cert) ->
 
 ktri(CEK, DigestType, RsaPub, {IaS, SkI}) ->
     {RId, Version} = case SkI of {_, false} -> {IaS, v0}; _ -> {SkI, v2} end,
-    Alg = #{ algorithm => atom2id(DigestType) },
+    Alg = #{ algorithm => oid(DigestType) },
     {ok, MaskGenP} = 'PKIX1-PSS-OAEP-Algorithms':encode('MaskGenAlgorithm', Alg),
     KeyEncryptionParameters =
 	#{ hashFunc => Alg,
@@ -272,7 +254,7 @@ ktri(CEK, DigestType, RsaPub, {IaS, SkI}) ->
 kari(CEK, DigestType, {EcPub, EcParameters}, {IaS, SkI}, KeyLength) ->
     RId = case SkI of
 	      {_, false} -> IaS;
-	      {_, Id} -> {rKeyId, #{subjectKeyIdentifier => Id}} end,
+	      {_, Id} -> {rKeyId, #{ subjectKeyIdentifier => Id }} end,
     Algorithm = case DigestType of
 		    sha224 -> 'CMS':'dhSinglePass-stdDH-sha224kdf-scheme'();
 		    sha256 -> 'CMS':'dhSinglePass-stdDH-sha256kdf-scheme'();
@@ -292,8 +274,7 @@ kari(CEK, DigestType, {EcPub, EcParameters}, {IaS, SkI}, KeyLength) ->
     Z = public_key:compute_key(EcPub, EcPriv),
     KEK = x963_kdf(DigestType, Z, SharedInfo, KeyLength),
     RecipientEncryptedKeys =
-	[#{encryptedKey => rfc3394:wrap(CEK, KEK),
-	   rid => RId }],
+	[#{ encryptedKey => rfc3394:wrap(CEK, KEK), rid => RId }],
     {kari,
      #{ version => v3,
 	originator =>
@@ -334,8 +315,8 @@ decrypt_envl(Content, RecipientCertDER, RecipientKeyDER) ->
 			      parameters := <<4, 16, IV/binary>> },
 		       encryptedContent := EncryptedContent }}} ?=
 	    'CMS':decode('EnvelopedData', Content),
-	Cipher = id2atom(Algorithm),
-	#{key_length := KeyLength, block_size := BlockSize} =
+	Cipher = oid(Algorithm),
+	#{ key_length := KeyLength, block_size := BlockSize } =
 	    crypto:cipher_info(Cipher),
 	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER,
 			 RecipientKeyDER, KeyLength),
@@ -356,7 +337,7 @@ decrypt_auth(Content, RecipientCertDER, RecipientKeyDER) ->
 			      parameters := Parameters },
 		       encryptedContent := EncryptedContent } } = M } ?=
 	    'CMS':decode('AuthEnvelopedData', Content),
-	Cipher = id2atom(Algorithm),
+	Cipher = oid(Algorithm),
 	MAClen = byte_size(MAC),
 	{ok, #{'aes-nonce' := Nonce, 'aes-ICVlen' := MAClen}} ?=
 	    'CMS':decode('GCMParameters', Parameters),
@@ -394,9 +375,9 @@ cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength) ->
     end.
 
 cec_oaep(_, {error, _} = E, _) -> E;
-cec_oaep(EncryptedKey, {ok, #{hashFunc := #{algorithm := AlgorithmId}}},
+cec_oaep(EncryptedKey, {ok, #{ hashFunc := #{ algorithm := AlgorithmId } }},
 	 RecipientKey) ->
-    Alg = id2atom(AlgorithmId),
+    Alg = oid(AlgorithmId),
     Opts = [{rsa_padding, rsa_pkcs1_oaep_padding},
 	    {rsa_mgf1_md, Alg}, {rsa_oaep_md, Alg}],
     {ok, public_key:decrypt_private(EncryptedKey, RecipientKey, Opts)}.
@@ -435,48 +416,44 @@ from_kari_or_ktri(IssuerAndSerialNumber, _KeyId,
 		       rid := IssuerAndSerialNumber
 		     } } | _]) ->
     {ok, {KeyEncryptionAlgorithm, KeyEncryptionParameters, EncryptedKey}};
-from_kari_or_ktri(_IssuerAndSerialNumber, KeyId,
+from_kari_or_ktri(_IssuerAndSerialNumber, SkI,
 		  [{ktri,
 		    #{ version := v2,
 		       keyEncryptionAlgorithm :=
 			   #{ algorithm := KeyEncryptionAlgorithm,
 			      parameters := KeyEncryptionParameters },
 		       encryptedKey := EncryptedKey,
-		       rid := KeyId
+		       rid := SkI
 		     } } | _]) ->
     {ok, {KeyEncryptionAlgorithm, KeyEncryptionParameters, EncryptedKey}};
-from_kari_or_ktri(IssuerAndSerialNumber, KeyId, [{ktri, _} | T]) ->
-    from_kari_or_ktri(IssuerAndSerialNumber, KeyId, T);
-from_kari_or_ktri(IssuerAndSerialNumber, KeyId,
+from_kari_or_ktri(IssuerAndSerialNumber, SkI, [{ktri, _} | T]) ->
+    from_kari_or_ktri(IssuerAndSerialNumber, SkI, T);
+from_kari_or_ktri(IssuerAndSerialNumber, {_, KeyId} = SkI,
 		  [{kari,
-		    #{version := v3,
-		      keyEncryptionAlgorithm :=
-			  #{ algorithm := KeyEncryptionAlgorithm,
-			     parameters := KeyEncryptionParameters },
-		      originator :=
-			  {originatorKey,
-			   #{ algorithm :=
-				  #{ algorithm := ?'id-ecPublicKey' },
-			      publicKey := OriginatorKey } },
-		      recipientEncryptedKeys := RecipientEncryptedKeys
+		    #{ version := v3,
+		       keyEncryptionAlgorithm :=
+			   #{ algorithm := KeyEncryptionAlgorithm,
+			      parameters := KeyEncryptionParameters },
+		       originator :=
+			   {originatorKey,
+			    #{ algorithm :=
+				   #{ algorithm := ?'id-ecPublicKey' },
+			       publicKey := OriginatorKey } },
+		       recipientEncryptedKeys := RecipientEncryptedKeys
 		     } = Kari} | T]) ->
     Ukm = case maps:is_key(ukm, Kari) of
 	      false -> false;
 	      true -> maps:get(ukm, Kari) end,
-    case rek(IssuerAndSerialNumber, KeyId, RecipientEncryptedKeys) of
-	false ->  from_kari_or_ktri(IssuerAndSerialNumber, KeyId, T);
-	#{ encryptedKey := EncryptedKey } ->
+    case lists:search(
+	   fun(#{ rid := {rKeyId, #{ subjectKeyIdentifier := Id }} }) ->
+		   Id =:= KeyId;
+	      (#{ rid := IaS }) -> IaS =:= IssuerAndSerialNumber end,
+	   RecipientEncryptedKeys) of
+	false ->  from_kari_or_ktri(IssuerAndSerialNumber, SkI, T);
+	{value, #{ encryptedKey := EncryptedKey } } ->
 	    {ok, {OriginatorKey, Ukm, KeyEncryptionAlgorithm,
 		  KeyEncryptionParameters, EncryptedKey}}
     end.
-
-rek(IssuerAndSerialNumber, {_, KeyId}, RecipientEncryptedKeys) ->
-    case lists:search(
-	   fun (#{rid := {rKeyId, #{subjectKeyIdentifier := Id}}}) ->
-		   Id == KeyId;
-	       (#{rid := IaS}) ->
-		   IaS == IssuerAndSerialNumber end, RecipientEncryptedKeys) of
-	{value, V} -> V; false -> false end.
 
 -doc """
 Verify CMS DER binary `InDER`
@@ -488,11 +465,11 @@ verify(InDER, Trusted) ->
     IdSignedData = 'CMS':'id-signedData'(),
     IdData = 'CMS':'id-data'(),
     maybe
-	{ok, #{contentType := IdSignedData, content := SignedDataDER}} ?=
+	{ok, #{ contentType := IdSignedData, content := SignedDataDER }} ?=
 	    'CMS':decode('ContentInfo', InDER),
-	{ok, #{encapContentInfo := #{ eContentType := IdData,
-				      eContent := EContent },
-	       signerInfos := SignerInfos} = SignedData} ?=
+	{ok, #{ encapContentInfo := #{ eContentType := IdData,
+				       eContent := EContent },
+		signerInfos := SignerInfos } = SignedData} ?=
 	    'CMS':decode('SignedData', SignedDataDER),
 
 	Included = included_certificates(SignedData),
@@ -503,7 +480,8 @@ verify(InDER, Trusted) ->
 		      {IaS, SkI} = cert_ias_and_ski(Cert),
 		      PublicKey = cert_public_key(Cert),
 		      case lists:search(
-			     fun(#{sid := Sid}) -> Sid =:= IaS orelse Sid =:= SkI end,
+			     fun(#{ sid := Sid }) ->
+				     Sid =:= IaS orelse Sid =:= SkI end,
 			     SignerInfos) of
 			  false -> false;
 			  {value, Si} -> {true, {Si, PublicKey}} end
@@ -511,11 +489,11 @@ verify(InDER, Trusted) ->
 
 	true ?=
 	    lists:any(
-	      fun({#{digestAlgorithm := #{algorithm := DigestAlgOID},
-		     signature := Signature} = SignerInfo,
+	      fun({#{ digestAlgorithm := #{ algorithm := DigestAlgOID },
+		      signature := Signature } = SignerInfo,
 		   Key}) ->
 		      maybe
-			  DigestType = id2atom(DigestAlgOID),
+			  DigestType = oid(DigestAlgOID),
 			  {ok, Digest} ?= digest(SignerInfo, DigestType, EContent),
 			  public_key:verify({digest, Digest}, DigestType,
 					    Signature, Key)
@@ -523,7 +501,7 @@ verify(InDER, Trusted) ->
 	{ok, EContent}
     else _ -> {error, verify} end.
 
-included_certificates(#{certificates := [_ | _] = Certs}) ->
+included_certificates(#{ certificates := [_ | _] = Certs }) ->
     L0 = ['PKIX1Explicit88':encode('Certificate', C) || {certificate, C} <- Certs],
     {_, L} = lists:unzip(L0),
     lists:usort(L);
@@ -543,7 +521,7 @@ digest(#{ signedAttrs := SignedAttrs }, DigestType, SignedData) ->
 digest(#{}, DigestType, SignedData) -> {ok, crypto:hash(DigestType, SignedData)}.
 
 cert_ias_and_ski(Cert) ->
-    {ok, #{tbsCertificate := TbsCertificate}}
+    {ok, #{ tbsCertificate := TbsCertificate }}
 	= 'PKIX1Explicit88':decode('Certificate', Cert),
     IaS = maps:with([serialNumber, issuer], TbsCertificate),
     SkI = subject_key_identifier(TbsCertificate),
@@ -551,11 +529,11 @@ cert_ias_and_ski(Cert) ->
 
 subject_key_identifier(#{ extensions := Extensions }) ->
     case
-	lists:search(fun(#{extnID := ExtnId}) ->
+	lists:search(fun(#{ extnID := ExtnId }) ->
 			     ExtnId == 'CMS':'id-ce-subjectKeyIdentifier'() end,
 		     Extensions) of
 	false -> false;
-	{value, #{extnValue := ExtnValue}} ->
+	{value, #{ extnValue := ExtnValue }} ->
 	    {ok, SubjectKeyIdentifier} =
 		'CMS':decode('SubjectKeyIdentifier', ExtnValue),
 	    SubjectKeyIdentifier end;
@@ -628,41 +606,55 @@ unpad(Data, N) ->
     <<R:RLen/binary, _/binary>> = E,
     <<S/binary, R/binary>>.
 
-id2atom(?'id-sha512') -> sha512;
-id2atom(?'id-sha384') -> sha384;
-id2atom(?'id-sha256') -> sha256;
-id2atom(?'id-sha224') -> sha224;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 3}) ->  aes_128_ofb;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 23}) -> aes_192_ofb;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 43}) -> aes_256_ofb;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 4}) ->  aes_128_cfb128;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 24}) -> aes_192_cfb128;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 44}) -> aes_256_cfb128;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 6}) ->  aes_128_gcm;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 26}) -> aes_192_gcm;
-id2atom({2, 16, 840, 1, 101, 3, 4, 1, 46}) -> aes_256_gcm;
-id2atom(?'id-aes128-CBC') -> aes_128_cbc;
-id2atom(?'id-aes192-CBC') -> aes_192_cbc;
-id2atom(?'id-aes256-CBC') -> aes_256_cbc.
-
-atom2id(sha512) -> ?'id-sha512';
-atom2id(sha384) -> ?'id-sha384';
-atom2id(sha256) -> ?'id-sha256';
-atom2id(sha224) -> ?'id-sha224';
-atom2id(aes_128_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 3};
-atom2id(aes_192_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 23};
-atom2id(aes_256_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 43};
-atom2id(aes_128_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 4};
-atom2id(aes_192_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 24};
-atom2id(aes_256_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 44};
-atom2id(aes_128_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 6};
-atom2id(aes_192_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 26};
-atom2id(aes_256_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 46};
-atom2id(aes_128_cbc) -> ?'id-aes128-CBC';
-atom2id(aes_192_cbc) -> ?'id-aes192-CBC';
-atom2id(aes_256_cbc) -> ?'id-aes256-CBC'.
-
+oid(?'id-sha512') -> sha512;
+oid(?'id-sha384') -> sha384;
+oid(?'id-sha256') -> sha256;
+oid(?'id-sha224') -> sha224;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 3}) ->  aes_128_ofb;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 23}) -> aes_192_ofb;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 43}) -> aes_256_ofb;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 4}) ->  aes_128_cfb128;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 24}) -> aes_192_cfb128;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 44}) -> aes_256_cfb128;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 6}) ->  aes_128_gcm;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 26}) -> aes_192_gcm;
+oid({2, 16, 840, 1, 101, 3, 4, 1, 46}) -> aes_256_gcm;
+oid(?'id-aes128-CBC') -> aes_128_cbc;
+oid(?'id-aes192-CBC') -> aes_192_cbc;
+oid(?'id-aes256-CBC') -> aes_256_cbc;
+oid(sha512) -> ?'id-sha512';
+oid(sha384) -> ?'id-sha384';
+oid(sha256) -> ?'id-sha256';
+oid(sha224) -> ?'id-sha224';
+oid(aes_128_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 3};
+oid(aes_192_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 23};
+oid(aes_256_ofb) -> {2, 16, 840, 1, 101, 3, 4, 1, 43};
+oid(aes_128_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 4};
+oid(aes_192_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 24};
+oid(aes_256_cfb128) -> {2, 16, 840, 1, 101, 3, 4, 1, 44};
+oid(aes_128_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 6};
+oid(aes_192_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 26};
+oid(aes_256_gcm) -> {2, 16, 840, 1, 101, 3, 4, 1, 46};
+oid(aes_128_cbc) -> ?'id-aes128-CBC';
+oid(aes_192_cbc) -> ?'id-aes192-CBC';
+oid(aes_256_cbc) -> ?'id-aes256-CBC'.
 
 bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 45>>) -> ?'id-aes256-wrap';
 bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 25>>) -> ?'id-aes192-wrap';
 bin2oid(<<48, 11, 6, 9, 96, 134, 72, 1, 101, 3, 4, 1, 5>>) -> ?'id-aes128-wrap'.
+
+-define('id-dsa-with-sha512', {2, 16, 840, 1, 101, 3, 4, 3, 4}).
+-define('id-dsa-with-sha384', {2, 16, 840, 1, 101, 3, 4, 3, 3}).
+
+sign_algs(H, K) -> { #{ algorithm => oid(H) }, sign_algs1(H, K) }.
+
+sign_algs1(sha512, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha512' };
+sign_algs1(sha384, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha384' };
+sign_algs1(sha256, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha256' };
+sign_algs1(sha224, #'DSAPrivateKey'{}) -> #{ algorithm => ?'id-dsa-with-sha224' };
+sign_algs1(sha512, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA512' };
+sign_algs1(sha384, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA384' };
+sign_algs1(sha256, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA256' };
+sign_algs1(sha224, #'ECPrivateKey'{}) -> #{ algorithm => ?'ecdsa-with-SHA224' };
+sign_algs1(_, #'RSAPrivateKey'{}) ->
+    #{ algorithm => ?'rsaEncryption', parameters => <<5, 0>> }.

@@ -32,10 +32,9 @@ encrypt(Config) ->
 		   H <- [sha224, sha256, sha384, sha512]],
     lists:foreach(
       fun({C, H}) ->
-	      logger:notice(#{c => C, h => H}),
 	      {ok, Enrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS0),
 						    der_cert_of_pem(Rsa1)],
-					    #{cipher => C, digest_type => H}),
+					    #{ cipher => C, digest_type => H }),
 	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(SelfS0),
 					 der_key_of_pem(SelfS0)),
 	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(Rsa1),
@@ -163,8 +162,8 @@ sign_chain(Config) ->
     {ok, Plain} = file:read_file(PlainF).
 
 sign_fail(_Config) ->
-    {error, _} = ecms:sign(<<>>, #{signers => [{<<>>, <<>>}]}),
-    {error, _} = ecms:sign(<<>>, #{resign => true, signers => [{<<>>, <<>>}]}).
+    {error, _} = ecms:sign(<<>>, #{ signers => [{<<>>, <<>>}] }),
+    {error, _} = ecms:sign(<<>>, #{ resign => true, signers => [{<<>>, <<>>}] }).
 
 verify(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
