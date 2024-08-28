@@ -7,14 +7,14 @@
 
 -export([sign/1, sign_chain/1, sign_fail/1]).
 
--export([decrypt_ec/1, decrypt_rsa/1, decrypt_keyid/1]).
+-export([decrypt_ec/1, decrypt_rsa/1, decrypt_keyid/1, decrypt_fail/1]).
 
--export([encrypt/1]).
+-export([encrypt/1, encrypt_auth_attrs/1]).
 
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
-     decrypt_keyid, encrypt].
+     decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -43,6 +43,27 @@ encrypt(Config) ->
 	      cms_decrypt(EncryptedF, PlainF, Rsa1),
 	      {ok, Plain} = file:read_file(PlainF)
       end, L).
+
+encrypt_auth_attrs(Config) ->
+    [_PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [SelfS0] = [filename:join(DataD, V) || V <- ["selfs0.pem"]],
+    Plain = testinput(),
+    AuthAttrs =
+	[ #{ attrType => 'CMS':'id-signingTime'(),
+	     attrValues => [<<24, 15, 49, 57, 55, 48, 48, 49, 48, 49, 48, 48,
+			     48, 48, 48, 48, 90>>] } ],
+    {ok, Encrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS0)],
+				   #{ cipher => aes_192_gcm,
+				      auth_attrs => AuthAttrs }),
+%%% OpenSSL CMS fails with nested asn1 error
+%%%    [PlainF, EncryptedF] =
+%%%	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+%%%    ok = file:write_file(EncryptedF, Encrypted),
+%%%    cms_decrypt(EncryptedF, PlainF, SelfS0),
+%%%    {ok, Plain} = file:read_file(PlainF),
+    {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0),
+			       der_key_of_pem(SelfS0)).
+
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -106,6 +127,38 @@ decrypt_keyid(Config) ->
 		  ecms:decrypt(Encrypted, der_cert_of_pem(Recipient),
 			       der_key_of_pem(Recipient))
       end, Recipients).
+
+decrypt_fail(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [SelfS0, Rsa1, IvMismatchF, IvMismatchAeadF, AeadFailedF, InvalidOaepF] =
+	[filename:join(DataD, V) ||
+	    V <- ["selfs0.pem", "smrsa1.pem", "iv_mismatch", "iv_mismatch_aead",
+		  "aead_decrypt_failed", "invalid_oaep"]],
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_encrypt(PlainF, EncryptedF, ["-aes256", "-recip", SelfS0,
+				     "-keyopt", "ecdh_kdf_md:sha1"]),
+    cms_decrypt(EncryptedF, PlainF, SelfS0),
+    {ok, Encrypted} = file:read_file(EncryptedF),
+    {error, unsupported_key_encryption} =
+	ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    {error, no_matching_kari_or_ktri} =
+	ecms:decrypt(Encrypted, der_cert_of_pem(Rsa1), der_key_of_pem(Rsa1)),
+    {ok, IvMismatch} = file:read_file(IvMismatchF),
+    {error, iv_mismatch} =
+	ecms:decrypt(IvMismatch, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    {ok, IvMismatchAead} = file:read_file(IvMismatchAeadF),
+    {error, iv_mismatch} =
+	ecms:decrypt(IvMismatchAead, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    {ok, AeadFailed} = file:read_file(AeadFailedF),
+    {error, aead_decrypt_failed} =
+	ecms:decrypt(AeadFailed, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    {ok, InvalidOaep} = file:read_file(InvalidOaepF),
+    {error, {asn1, _}} =
+	ecms:decrypt(InvalidOaep, der_cert_of_pem(Rsa1), der_key_of_pem(Rsa1)),
+    {error, {asn1, _}} = ecms:decrypt(<<>>, <<>>, <<>>).
 
 sign(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -240,8 +293,8 @@ verify_pss(Config) ->
 verify_fail(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
     [PlainF, SignedF] = [filename:join(PrivD, V) || V <- ["plain", "signed"]],
-    [Leaf0, Im0, Policy0, Policy1, SpecialF, Selfsigned, ManipulatedContentF,
-     InvalidPssF, Rsa1] =
+    [Leaf0, Im0, Policy0, Policy1, SpecialF, Selfsigned,
+     ManipulatedContentF, InvalidPssF, Rsa1] =
 	[filename:join(DataD, V) ||
 	    V <- ["leaf0.pem", "0Im.pem", "0Policy.pem", "1Policy.pem",
 		  "selfsigned_special.c", "selfsigned.c", "manipulated_content",

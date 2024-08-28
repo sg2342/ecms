@@ -342,8 +342,8 @@ decrypt_auth(Content, RecipientCertDER, RecipientKeyDER) ->
 	{ok, #{'aes-nonce' := Nonce, 'aes-ICVlen' := MAClen}} ?=
 	    'CMS':decode('GCMParameters', Parameters),
 	#{ key_length := KeyLength } = crypto:cipher_info(Cipher),
-	{ok, CEK} = cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength),
-	{ok, AAD} =
+	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength),
+	{ok, AAD} ?=
 	    case maps:is_key(authAttrs, M) of
 		false -> {ok, <<>>};
 		true -> 'CMS':encode('AuthAttributes', maps:get(authAttrs, M))
@@ -402,10 +402,10 @@ cec_ec(OriginatorKey, Ukm, KeyEncryptionAlgorithm, KeyEncryptionParameters,
 	KEK = x963_kdf(DigestType, Z, SharedInfo, KeyLength),
 	try
 	    {ok, rfc3394:unwrap(EncryptedKey, KEK)}
-	catch {error, iv_mismatch} = E0 -> E0 end
+	catch error:iv_mismatch -> {error, iv_mismatch} end
     else {error, _} = E1 -> E1 end.
 
-from_kari_or_ktri(_, _, []) -> {error, no_matching_kari};
+from_kari_or_ktri(_, _, []) -> {error, no_matching_kari_or_ktri};
 from_kari_or_ktri(IssuerAndSerialNumber, _KeyId,
 		  [{ktri,
 		    #{ version := v0,
