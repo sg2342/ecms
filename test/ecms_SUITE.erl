@@ -24,9 +24,9 @@ encrypt(Config) ->
 	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
     Plain = testinput(),
     ok = file:write_file(PlainF, Plain),
-    {ok, Encrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS3)]),
-    {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS3),
-			       der_key_of_pem(SelfS3)),
+    {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS3)]),
+    {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS3),
+			       key_from_pemf(SelfS3)),
     L = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
 			 aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
 			 aes_128_cbc, aes_192_cbc, aes_256_cbc,
@@ -34,13 +34,13 @@ encrypt(Config) ->
 		   H <- [sha224, sha256, sha384, sha512]],
     lists:foreach(
       fun({C, H}) ->
-	      {ok, Enrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS0),
-						    der_cert_of_pem(Rsa1)],
+	      {ok, Enrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS0),
+						    cert_from_pemf(Rsa1)],
 					    #{ cipher => C, digest_type => H }),
-	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(SelfS0),
-					 der_key_of_pem(SelfS0)),
-	      {ok, Plain} = ecms:decrypt(Enrypted, der_cert_of_pem(Rsa1),
-					 der_key_of_pem(Rsa1)),
+	      {ok, Plain} = ecms:decrypt(Enrypted, cert_from_pemf(SelfS0),
+					 key_from_pemf(SelfS0)),
+	      {ok, Plain} = ecms:decrypt(Enrypted, cert_from_pemf(Rsa1),
+					 key_from_pemf(Rsa1)),
 	      ok = file:write_file(EncryptedF, Enrypted),
 	      cms_decrypt(EncryptedF, PlainF, SelfS0),
 	      {ok, Plain} = file:read_file(PlainF),
@@ -55,8 +55,8 @@ encrypt_auth_attrs(Config) ->
     AuthAttrs =
 	[ #{ attrType => 'CMS':'id-signingTime'(),
 	     attrValues => [<<24, 15, 49, 57, 55, 48, 48, 49, 48, 49, 48, 48,
-			     48, 48, 48, 48, 90>>] } ],
-    {ok, Encrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS0)],
+			      48, 48, 48, 48, 90>>] } ],
+    {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS0)],
 				   #{ cipher => aes_192_gcm,
 				      auth_attrs => AuthAttrs }),
 %%% OpenSSL CMS fails with nested asn1 error
@@ -65,8 +65,8 @@ encrypt_auth_attrs(Config) ->
 %%%    ok = file:write_file(EncryptedF, Encrypted),
 %%%    cms_decrypt(EncryptedF, PlainF, SelfS0),
 %%%    {ok, Plain} = file:read_file(PlainF),
-    {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0),
-			       der_key_of_pem(SelfS0)).
+    {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS0),
+			       key_from_pemf(SelfS0)).
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -85,8 +85,8 @@ decrypt_rsa(Config) ->
 	      cms_decrypt(EncryptedF, PlainF, Rsa1),
 	      {ok, Plain} = file:read_file(PlainF),
 	      {ok, Plain} =
-		  ecms:decrypt(Encrypted, der_cert_of_pem(Rsa1),
-			       der_key_of_pem(Rsa1)) end,
+		  ecms:decrypt(Encrypted, cert_from_pemf(Rsa1),
+			       key_from_pemf(Rsa1)) end,
       supported_ciphers_and_hashes()).
 
 decrypt_ec(Config) ->
@@ -102,8 +102,8 @@ decrypt_ec(Config) ->
 			  [Cipher, "-recip", SelfS0,
 			   "-keyopt", "ecdh_kdf_md:" ++ Hash]),
 	      {ok, Encrypted} = file:read_file(EncryptedF),
-	      {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0),
-					 der_key_of_pem(SelfS0)) end,
+	      {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS0),
+					 key_from_pemf(SelfS0)) end,
       supported_ciphers_and_hashes()).
 
 decrypt_keyid(Config) ->
@@ -127,8 +127,8 @@ decrypt_keyid(Config) ->
 	      cms_decrypt(EncryptedF, PlainF, Recipient),
 	      {ok, Plain} = file:read_file(PlainF),
 	      {ok, Plain} =
-		  ecms:decrypt(Encrypted, der_cert_of_pem(Recipient),
-			       der_key_of_pem(Recipient))
+		  ecms:decrypt(Encrypted, cert_from_pemf(Recipient),
+			       key_from_pemf(Recipient))
       end, Recipients).
 
 decrypt_fail(Config) ->
@@ -146,21 +146,21 @@ decrypt_fail(Config) ->
     cms_decrypt(EncryptedF, PlainF, SelfS0),
     {ok, Encrypted} = file:read_file(EncryptedF),
     {error, unsupported_key_encryption} =
-	ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+	ecms:decrypt(Encrypted, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     {error, no_matching_kari_or_ktri} =
-	ecms:decrypt(Encrypted, der_cert_of_pem(Rsa1), der_key_of_pem(Rsa1)),
+	ecms:decrypt(Encrypted, cert_from_pemf(Rsa1), key_from_pemf(Rsa1)),
     {ok, IvMismatch} = file:read_file(IvMismatchF),
     {error, iv_mismatch} =
-	ecms:decrypt(IvMismatch, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+	ecms:decrypt(IvMismatch, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     {ok, IvMismatchAead} = file:read_file(IvMismatchAeadF),
     {error, iv_mismatch} =
-	ecms:decrypt(IvMismatchAead, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+	ecms:decrypt(IvMismatchAead, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     {ok, AeadFailed} = file:read_file(AeadFailedF),
     {error, aead_decrypt_failed} =
-	ecms:decrypt(AeadFailed, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+	ecms:decrypt(AeadFailed, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     {ok, InvalidOaep} = file:read_file(InvalidOaepF),
     {error, {asn1, _}} =
-	ecms:decrypt(InvalidOaep, der_cert_of_pem(Rsa1), der_key_of_pem(Rsa1)),
+	ecms:decrypt(InvalidOaep, cert_from_pemf(Rsa1), key_from_pemf(Rsa1)),
     {error, {asn1, _}} = ecms:decrypt(<<>>, <<>>, <<>>).
 
 sign(Config) ->
@@ -174,12 +174,12 @@ sign(Config) ->
     Plain = testinput(),
     {ok, Signed} = ecms:sign(Plain,
 			     #{ digest_type => sha224,
-				signers => [der_cert_and_key_of_pem(Dsa1),
-					    der_cert_and_key_of_pem(Ec1)] }),
+				signers => [cert_key_from_pemf(Dsa1),
+					    cert_key_from_pemf(Ec1)] }),
     ok = file:write_file(SignedF, Signed),
     cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
     {ok, Plain} = file:read_file(PlainF),
-    Signers = lists:map(fun der_cert_and_key_of_pem/1, [Dsa2, Ec2, Rsa2, Rsa1]),
+    Signers = lists:map(fun cert_key_from_pemf/1, [Dsa2, Ec2, Rsa2, Rsa1]),
     {ok, Resigned} = ecms:sign(Signed,
 			       #{ digest_type => sha224,
 				  resign => true,
@@ -196,7 +196,7 @@ sign(Config) ->
 	      cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
 	      {ok, Plain} = file:read_file(PlainF)
       end, [sha512, sha256, sha384]),
-    {ok, Signed3} = ecms:sign(Plain, der_cert_of_pem(SelfS0), der_key_of_pem(SelfS0)),
+    {ok, Signed3} = ecms:sign(Plain, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     ok = file:write_file(SignedF, Signed3),
     cms_verify(SignedF, PlainF, ["-CAfile", SelfS0]),
     {ok, Plain} = file:read_file(PlainF).
@@ -208,8 +208,8 @@ sign_chain(Config) ->
 				V <- ["leaf0.pem", "0Im.pem", "0Policy.pem"]],
     Plain = testinput(),
     {ok, Signed} = ecms:sign(Plain, #{ digest_type => sha512,
-				       included_certs => [der_cert_of_pem(Im0)],
-				       signers => [der_cert_and_key_of_pem(Leaf0)]
+				       included_certs => [cert_from_pemf(Im0)],
+				       signers => [cert_key_from_pemf(Leaf0)]
 				     }),
     ok = file:write_file(SignedF, Signed),
     cms_verify(SignedF, PlainF, ["-CAfile", Policy0]),
@@ -232,14 +232,14 @@ verify(Config) ->
     cms_sign(PlainF, SignedF, ["-md", "sha224", "-signer", Dsa1, "-signer", Ec1]),
     cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
     {ok, Signed} = file:read_file(SignedF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SmRoot)]),
-    {error, verify} = ecms:verify(Signed, [der_cert_of_pem(Rsa2)]),
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(SmRoot)]),
+    {error, verify} = ecms:verify(Signed, [cert_from_pemf(Rsa2)]),
     cms_resign(SignedF, ResignedF, ["-md", "sha224",
 				    "-signer", Dsa2, "-signer", Ec2,
 				    "-signer", Rsa2, "-signer", Rsa1]),
     cms_verify(ResignedF, PlainF, ["-CAfile", SmRoot]),
     {ok, Resigned} = file:read_file(ResignedF),
-    {ok, Plain} = ecms:verify(Resigned, [der_cert_of_pem(Rsa2)]).
+    {ok, Plain} = ecms:verify(Resigned, [cert_from_pemf(Rsa2)]).
 
 verify_noattr(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -251,7 +251,7 @@ verify_noattr(Config) ->
     cms_sign(PlainF, SignedF, ["-md", "sha256", "-keyid", "-signer", SelfS0, "-noattr"]),
     cms_verify(SignedF, PlainF, ["-CAfile", SelfS0]),
     {ok, Signed} = file:read_file(SignedF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SelfS0)]).
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(SelfS0)]).
 
 verify_nocerts(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -263,7 +263,7 @@ verify_nocerts(Config) ->
     cms_sign(PlainF, SignedF, ["-md", "sha256", "-signer", SelfS0, "-nocerts"]),
     cms_verify(SignedF, PlainF, ["-CAfile", SelfS0, "-certfile", SelfS0]),
     {ok, Signed} = file:read_file(SignedF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SelfS0)]).
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(SelfS0)]).
 
 verify_chain(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -275,7 +275,7 @@ verify_chain(Config) ->
     cms_sign(PlainF, SignedF, ["-md", "sha384", "-signer", Leaf0, "-certfile", Im0]),
     cms_verify(SignedF, PlainF, ["-CAfile", Policy0]),
     {ok, Signed} = file:read_file(SignedF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(Policy0)]).
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(Policy0)]).
 
 verify_pss(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -291,7 +291,7 @@ verify_pss(Config) ->
     {ok, Signed} = file:read_file(SignedF),
     cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
     {ok, Plain} = file:read_file(PlainF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SmRoot)]).
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(SmRoot)]).
 
 verify_fail(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -308,13 +308,13 @@ verify_fail(Config) ->
 			       "-certfile", Im0]),
     cms_verify(SignedF, PlainF, ["-CAfile", Policy0]),
     {ok, Signed} = file:read_file(SignedF),
-    {error, verify} = ecms:verify(Signed, [der_cert_of_pem(SpecialF),
-					   der_cert_of_pem(Policy1)]),
+    {error, verify} = ecms:verify(Signed, [cert_from_pemf(SpecialF),
+					   cert_from_pemf(Policy1)]),
     {ok, ManipulatedContent} = file:read_file(ManipulatedContentF),
     {error, verify} = ecms:verify(ManipulatedContent,
-				  [der_cert_of_pem(Selfsigned)]),
+				  [cert_from_pemf(Selfsigned)]),
     {ok, InvalidPss} = file:read_file(InvalidPssF),
-    {error, verify} = ecms:verify(InvalidPss, [der_cert_of_pem(Rsa1)]).
+    {error, verify} = ecms:verify(InvalidPss, [cert_from_pemf(Rsa1)]).
 
 testinput() -> crypto:strong_rand_bytes(rand:uniform(321)).
 
@@ -359,13 +359,13 @@ spwn1(Port, SoFar) ->
 	    {ExitCode, lists:flatten(SoFar)}
     end.
 
-der_cert_and_key_of_pem(PemFile) ->
-    {der_cert_of_pem(PemFile), der_key_of_pem(PemFile)}.
+cert_key_from_pemf(PemFile) ->
+    {cert_from_pemf(PemFile), key_from_pemf(PemFile)}.
 
-der_key_of_pem(PemFile) -> der_of_pem('PrivateKeyInfo', PemFile).
-der_cert_of_pem(PemFile) -> der_of_pem('Certificate', PemFile).
+key_from_pemf(PemFile) -> from_pemf('PrivateKeyInfo', PemFile).
+cert_from_pemf(PemFile) -> from_pemf('Certificate', PemFile).
 
-der_of_pem(K, PemFile) ->
+from_pemf(K, PemFile) ->
     {ok, Pem} = file:read_file(PemFile),
     {K, DER, not_encrypted} = lists:keyfind(K, 1, public_key:pem_decode(Pem)),
     DER.
