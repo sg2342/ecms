@@ -9,25 +9,35 @@
 
 -export([decrypt_ec/1, decrypt_rsa/1, decrypt_keyid/1, decrypt_fail/1]).
 
--export([encrypt/1, encrypt_auth_attrs/1]).
+-export([encrypt/1, encrypt_auth_attrs/1, encrypt_fail/1]).
 
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
-     decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs].
+     decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs,
+     encrypt_fail].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
-    [SelfS0, SelfS3, Rsa1] =
-	[filename:join(DataD, V) || V <- ["selfs0.pem", "selfs3.pem", "smrsa1.pem"]],
+    [SelfS0, SelfS3, SelfS4, Rsa1] =
+	[filename:join(DataD, V) ||
+	    V <- ["selfs0.pem", "selfs3.pem", "selfs4.pem", "smrsa1.pem"]],
     [PlainF, EncryptedF] =
 	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
     Plain = testinput(),
     ok = file:write_file(PlainF, Plain),
-    {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS3)]),
-    {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS3),
-			       key_from_pemf(SelfS3)),
-    L = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
+    CertsWithoutSkI = [SelfS3, SelfS4],
+    lists:foreach(
+      fun(Cert) ->
+	      {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(Cert)]),
+	      {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(Cert),
+					 key_from_pemf(Cert)),
+	      ok = file:write_file(EncryptedF, Encrypted),
+	      cms_decrypt(EncryptedF, PlainF, Cert),
+	      {ok, Plain} = file:read_file(PlainF)
+      end, CertsWithoutSkI),
+
+    Algs = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
 			 aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
 			 aes_128_cbc, aes_192_cbc, aes_256_cbc,
 			 aes_128_gcm, aes_192_gcm, aes_256_gcm],
@@ -46,7 +56,7 @@ encrypt(Config) ->
 	      {ok, Plain} = file:read_file(PlainF),
 	      cms_decrypt(EncryptedF, PlainF, Rsa1),
 	      {ok, Plain} = file:read_file(PlainF)
-      end, L).
+      end, Algs).
 
 encrypt_auth_attrs(Config) ->
     [_PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -67,6 +77,14 @@ encrypt_auth_attrs(Config) ->
 %%%    {ok, Plain} = file:read_file(PlainF),
     {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS0),
 			       key_from_pemf(SelfS0)).
+
+encrypt_fail(Config) ->
+    Dsa1 = filename:join(proplists:get_value(data_dir, Config), "smdsa1.pem"),
+    {error, unsupported_key_type} =
+	ecms:encrypt(<<>>, [cert_from_pemf(Dsa1)]),
+    {error, der_decode_cert} =
+	ecms:encrypt(<<>>, [<<>>], #{cipher => aes_256_gcm}),
+    {error, der_decode_cert} = ecms:encrypt(<<>>, [<<>>]).
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -310,6 +328,7 @@ verify_fail(Config) ->
 			       "-certfile", Im0]),
     cms_verify(SignedF, PlainF, ["-CAfile", Policy0]),
     {ok, Signed} = file:read_file(SignedF),
+    {error, der_decode_cert} = ecms:verify(Signed, [<<>>]),
     {error, verify} = ecms:verify(Signed, [cert_from_pemf(SpecialF),
 					   cert_from_pemf(Policy1)]),
     {ok, ManipulatedContent} = file:read_file(ManipulatedContentF),
