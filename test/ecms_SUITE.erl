@@ -18,11 +18,15 @@ all() ->
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
-    [SelfS0, Rsa1] = [filename:join(DataD, V) || V <- ["selfs0.pem", "smrsa1.pem"]],
+    [SelfS0, SelfS3, Rsa1] =
+	[filename:join(DataD, V) || V <- ["selfs0.pem", "selfs3.pem", "smrsa1.pem"]],
     [PlainF, EncryptedF] =
 	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
     Plain = testinput(),
     ok = file:write_file(PlainF, Plain),
+    {ok, Encrypted} = ecms:encrypt(Plain, [der_cert_of_pem(SelfS3)]),
+    {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS3),
+			       der_key_of_pem(SelfS3)),
     L = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
 			 aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
 			 aes_128_cbc, aes_192_cbc, aes_256_cbc,
@@ -63,7 +67,6 @@ encrypt_auth_attrs(Config) ->
 %%%    {ok, Plain} = file:read_file(PlainF),
     {ok, Plain} = ecms:decrypt(Encrypted, der_cert_of_pem(SelfS0),
 			       der_key_of_pem(SelfS0)).
-
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -254,13 +257,13 @@ verify_nocerts(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
     [PlainF, SignedF] = [filename:join(PrivD, V) || V <- ["plain", "signed"]],
 
-    [SelfS3] = [filename:join(DataD, V) || V <- ["selfs3.pem"]],
+    [SelfS0] = [filename:join(DataD, V) || V <- ["selfs0.pem"]],
     Plain = testinput(),
     ok = file:write_file(PlainF, Plain),
-    cms_sign(PlainF, SignedF, ["-md", "sha256", "-signer", SelfS3, "-nocerts"]),
-    cms_verify(SignedF, PlainF, ["-CAfile", SelfS3, "-certfile", SelfS3]),
+    cms_sign(PlainF, SignedF, ["-md", "sha256", "-signer", SelfS0, "-nocerts"]),
+    cms_verify(SignedF, PlainF, ["-CAfile", SelfS0, "-certfile", SelfS0]),
     {ok, Signed} = file:read_file(SignedF),
-    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SelfS3)]).
+    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SelfS0)]).
 
 verify_chain(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
