@@ -490,13 +490,15 @@ verify(InDER, Trusted) ->
 	true ?=
 	    lists:any(
 	      fun({#{ digestAlgorithm := #{ algorithm := DigestAlgOID },
+		      signatureAlgorithm := SignatureAlgorithm,
 		      signature := Signature } = SignerInfo,
 		   Key}) ->
 		      maybe
+			  {ok, Opts} = pk_verify_opts(SignatureAlgorithm),
 			  DigestType = oid(DigestAlgOID),
 			  {ok, Digest} ?= digest(SignerInfo, DigestType, EContent),
 			  public_key:verify({digest, Digest}, DigestType,
-					    Signature, Key)
+					    Signature, Key, Opts)
 		      else _ -> false end end, L),
 	{ok, EContent}
     else _ -> {error, verify} end.
@@ -506,6 +508,22 @@ included_certificates(#{ certificates := [_ | _] = Certs }) ->
     {_, L} = lists:unzip(L0),
     lists:usort(L);
 included_certificates(_) -> [].
+
+pk_verify_opts(#{ algorithm := ?'id-RSASSA-PSS', parameters := Parameters}) ->
+    maybe
+	{ok, #{ maskGenAlgorithm := #{ algorithm := ?'id-mgf1',
+				       parameters := MgParameters},
+		saltLength := SaltLength}} ?=
+	    'PKIX1-PSS-OAEP-Algorithms':decode('RSASSA-PSS-params', Parameters),
+	{ok, #{ algorithm := AlgOId }} ?=
+	    'PKIX1-PSS-OAEP-Algorithms':decode('MaskGenAlgorithm', MgParameters),
+	{ok, [{rsa_padding, rsa_pkcs1_pss_padding},
+	      {rsa_mgf1_md, oid(AlgOId)},
+	      {rsa_pss_saltlen, SaltLength}]}
+    else _ -> {error, pk_verify_opts} end;
+pk_verify_opts(_) -> {ok, []}.
+
+
 
 digest(#{ signedAttrs := SignedAttrs }, DigestType, SignedData) ->
     Digest = crypto:hash(DigestType, SignedData),

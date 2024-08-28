@@ -2,7 +2,8 @@
 
 -export([all/0]).
 
--export([verify/1, verify_noattr/1, verify_nocerts/1, verify_chain/1, verify_fail/1]).
+-export([verify/1, verify_noattr/1, verify_nocerts/1, verify_chain/1,
+	 verify_pss/1, verify_fail/1]).
 
 -export([sign/1, sign_chain/1, sign_fail/1]).
 
@@ -10,13 +11,10 @@
 
 -export([encrypt/1]).
 
-
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
-     sign, sign_chain, sign_fail,
-     decrypt_ec, decrypt_rsa, decrypt_keyid,
-     encrypt
-    ].
+     verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
+     decrypt_keyid, encrypt].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -223,6 +221,22 @@ verify_chain(Config) ->
     {ok, Signed} = file:read_file(SignedF),
     {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(Policy0)]).
 
+verify_pss(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [Rsa1, SmRoot] = [filename:join(DataD, V) || V <- ["smrsa1.pem", "smroot.pem"]],
+    [PlainF, SignedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "signed"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_sign(PlainF, SignedF, ["-md", "sha256", "-signer", Rsa1,
+			       "-keyopt", "rsa_padding_mode:pss",
+			       "-keyopt", "rsa_pss_saltlen:24",
+			       "-keyopt", "rsa_mgf1_md:sha224"]),
+    {ok, Signed} = file:read_file(SignedF),
+    cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
+    {ok, Plain} = file:read_file(PlainF),
+    {ok, Plain} = ecms:verify(Signed, [der_cert_of_pem(SmRoot)]).
+
 verify_fail(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
     [PlainF, SignedF] = [filename:join(PrivD, V) || V <- ["plain", "signed"]],
@@ -271,7 +285,8 @@ cms_decrypt(Encrypted, Plain, Recip, Tail) ->
 
 -spec spwn([string()]) -> {ExitCode :: integer(), string()}.
 spwn([Arg0 | Args]) ->
-    Opts = [stream, in, eof, hide, stderr_to_stdout, exit_status, {arg0, Arg0}, {args, Args}],
+    Opts = [stream, in, eof, hide, stderr_to_stdout, exit_status, {arg0, Arg0},
+	    {args, Args}],
     spwn1(open_port({spawn_executable, os:find_executable(Arg0)}, Opts), []).
 
 spwn1(Port, SoFar) ->
