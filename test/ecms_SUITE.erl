@@ -161,6 +161,8 @@ decrypt_fail(Config) ->
     {ok, InvalidOaep} = file:read_file(InvalidOaepF),
     {error, {asn1, _}} =
 	ecms:decrypt(InvalidOaep, cert_from_pemf(Rsa1), key_from_pemf(Rsa1)),
+    {error, der_decode_private_key} =
+	ecms:decrypt(Encrypted, cert_from_pemf(Rsa1), <<>>),
     {error, {asn1, _}} = ecms:decrypt(<<>>, <<>>, <<>>).
 
 sign(Config) ->

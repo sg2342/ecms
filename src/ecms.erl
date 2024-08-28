@@ -117,7 +117,7 @@ sign3([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInfos0) ->
     maybe
 	{ok, #{ tbsCertificate := TbsCertificate }}
 	    ?= 'PKIX1Explicit88':decode('Certificate', CertDER),
-	Key = public_key:der_decode('PrivateKeyInfo', KeyDER),
+	{ok, Key} = decode_private_key(KeyDER),
 	{DigestAlgorithm, {SignatureAlgorithm, Opts}} =
 	    sign_algs(DigestType, Key),
 	IaS = maps:with([serialNumber, issuer], TbsCertificate),
@@ -318,8 +318,9 @@ decrypt_envl(Content, RecipientCertDER, RecipientKeyDER) ->
 	Cipher = oid(Algorithm),
 	#{ key_length := KeyLength, block_size := BlockSize } =
 	    crypto:cipher_info(Cipher),
+	{ok, RecipientKey} ?= decode_private_key(RecipientKeyDER),
 	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER,
-			 RecipientKeyDER, KeyLength),
+			 RecipientKey, KeyLength),
 	{ok, unpad(crypto:crypto_one_time(Cipher, CEK, IV, EncryptedContent, false),
 		   BlockSize)}
     else {error, _} = E -> E end.
@@ -342,7 +343,8 @@ decrypt_auth(Content, RecipientCertDER, RecipientKeyDER) ->
 	{ok, #{'aes-nonce' := Nonce, 'aes-ICVlen' := MAClen}} ?=
 	    'CMS':decode('GCMParameters', Parameters),
 	#{ key_length := KeyLength } = crypto:cipher_info(Cipher),
-	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength),
+	{ok, RecipientKey} = decode_private_key(RecipientKeyDER),
+	{ok, CEK} ?= cek(RecipientInfos, RecipientCertDER, RecipientKey, KeyLength),
 	{ok, AAD} ?=
 	    case maps:is_key(authAttrs, M) of
 		false -> {ok, <<>>};
@@ -355,9 +357,8 @@ decrypt_auth(Content, RecipientCertDER, RecipientKeyDER) ->
 	end
     else {error, _} = E -> E end.
 
-cek(RecipientInfos, RecipientCertDER, RecipientKeyDER, KeyLength) ->
+cek(RecipientInfos, RecipientCertDER, RecipientKey, KeyLength) ->
     {IaS, SkI} = cert_ias_and_ski(RecipientCertDER),
-    RecipientKey = public_key:der_decode('PrivateKeyInfo', RecipientKeyDER),
     case from_kari_or_ktri(IaS, SkI, RecipientInfos) of
 	{ok, {OriginatorKey, Ukm, KeyEncryptionAlgorithm,
 	      KeyEncryptionParameters, EncryptedKey}} ->
@@ -609,6 +610,10 @@ shared_info_der(WrapAlg, Ukm, KeyLength) ->
 		      false -> SharedInfo0;
 		      V -> SharedInfo0#{ entityUInfo => V } end,
     'CMS':encode('ECC-CMS-SharedInfo', SharedInfo).
+
+decode_private_key(DER) ->
+    try {ok, public_key:der_decode('PrivateKeyInfo', DER)}
+    catch error:_ -> {error, der_decode_private_key} end.
 
 pad(Data, 1) -> Data;
 pad(Data, N) ->
