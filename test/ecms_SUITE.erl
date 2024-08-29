@@ -11,11 +11,13 @@
 
 -export([encrypt/1, encrypt_auth_attrs/1, encrypt_fail/1]).
 
+-export([curves/1]).
+
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
      decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs,
-     encrypt_fail].
+     encrypt_fail, curves].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -38,10 +40,10 @@ encrypt(Config) ->
       end, CertsWithoutSkI),
 
     Algs = [{C, H} || C <- [aes_128_ofb, aes_192_ofb, aes_256_ofb,
-			 aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
-			 aes_128_cbc, aes_192_cbc, aes_256_cbc,
-			 aes_128_gcm, aes_192_gcm, aes_256_gcm],
-		   H <- [sha224, sha256, sha384, sha512]],
+			    aes_128_cfb128, aes_192_cfb128, aes_256_cfb128,
+			    aes_128_cbc, aes_192_cbc, aes_256_cbc,
+			    aes_128_gcm, aes_192_gcm, aes_256_gcm],
+		      H <- [sha224, sha256, sha384, sha512]],
     lists:foreach(
       fun({C, H}) ->
 	      {ok, Enrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS0),
@@ -336,6 +338,77 @@ verify_fail(Config) ->
 				  [cert_from_pemf(Selfsigned)]),
     {ok, InvalidPss} = file:read_file(InvalidPssF),
     {error, verify} = ecms:verify(InvalidPss, [cert_from_pemf(Rsa1)]).
+
+curves(Config) ->
+    PrivD = proplists:get_value(priv_dir, Config),
+    [PlainF, SignedF, EncryptedF, CertF] =
+	[filename:join(PrivD, V) ||
+	    V <- ["plain", "signed", "encrypted", "cert"] ],
+    lists:foreach(
+      fun(Curve) ->
+	      selfsigned(PrivD, Curve, CertF),
+	      t_sign(PlainF, SignedF, CertF),
+	      t_verify(PlainF, SignedF, CertF),
+	      t_encrypt(PlainF, EncryptedF, CertF),
+	      t_decrypt(PlainF, EncryptedF, CertF)
+      end,
+      [prime256v1, prime192v1,
+       sect571r1, sect571k1, sect409r1, sect409k1, secp521r1, secp384r1,
+       secp224r1, secp224k1, secp192k1, secp160r2, secp128r2, secp128r1,
+       sect233r1, sect233k1, sect193r2, sect193r1, sect131r2, sect131r1,
+       sect283r1, sect283k1, sect163r2, secp256k1, secp160k1, secp160r1,
+       secp112r2, secp112r1, sect113r2, sect113r1, sect239k1, sect163r1,
+       sect163k1, brainpoolP160r1, brainpoolP160t1,
+       brainpoolP192r1, brainpoolP192t1, brainpoolP224r1, brainpoolP224t1,
+       brainpoolP256r1, brainpoolP256t1, brainpoolP320r1, brainpoolP320t1,
+       brainpoolP384r1, brainpoolP384t1, brainpoolP512r1, brainpoolP512t1]).
+
+t_sign(PlainF, SignedF, CertF) ->
+    Plain = testinput(),
+    {ok, Signed} = ecms:sign(Plain, cert_from_pemf(CertF), key_from_pemf(CertF)),
+    ok = file:write_file(SignedF, Signed),
+    cms_verify(SignedF, PlainF, ["-CAfile", CertF]),
+    {ok, Plain} = file:read_file(PlainF).
+
+t_verify(PlainF, SignedF, CertF) ->
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_sign(PlainF, SignedF, ["-md", "sha224", "-signer", CertF]),
+    {ok, Signed} = file:read_file(SignedF),
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(CertF)]).
+
+t_encrypt(PlainF, EncryptedF, CertF) ->
+    Plain = testinput(),
+    {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(CertF)]),
+    ok = file:write_file(EncryptedF, Encrypted),
+    cms_decrypt(EncryptedF, PlainF, CertF),
+    {ok, Plain} = file:read_file(PlainF).
+
+t_decrypt(PlainF, EncryptedF, CertF) ->
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_encrypt(PlainF, EncryptedF, ["-aes-256-cbc", "-recip", CertF, "-keyopt",
+				     "ecdh_kdf_md:sha384"]),
+    {ok, Encrypted} = file:read_file(EncryptedF),
+    {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(CertF),
+			       key_from_pemf(CertF)).
+
+selfsigned(Dir, Curve, CertF) ->
+    [K, C, R] = [ filename:join(Dir, V) || V <- ["k", "c", "r"] ],
+    GenPKey = ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+	       "ec_param_enc:named_curve",
+	       "-pkeyopt", "ec_paramgen_curve:" ++ atom_to_list(Curve),
+	       "-out", K],
+    Req = ["openssl", "req", "-new", "-out", R, "-key", K, "-subj",
+	   "/CN=" ++ atom_to_list(Curve)],
+    X509 = ["openssl", "x509", "-req", "-in", R, "-out", C, "-signkey", K],
+    {0, _} = spwn(GenPKey),
+    {0, _} = spwn(Req),
+    {0, _} = spwn(X509),
+    {ok, Cert} = file:read_file(C),
+    {ok, Key} = file:read_file(K),
+    ok = file:write_file(CertF, [Cert, Key]),
+    [file:delete(V) || V <- [K, C, R]].
 
 testinput() -> crypto:strong_rand_bytes(rand:uniform(321)).
 
