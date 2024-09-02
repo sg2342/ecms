@@ -396,7 +396,7 @@ decrypt_envl(Content, RecipientCertDER, RecipientKeyDER) ->
 		    #{ contentType := IdData,
 		       contentEncryptionAlgorithm :=
 			   #{ algorithm := Algorithm,
-			      parameters := <<4, 16, IV/binary>> },
+			      parameters := <<4, IVlen, IV:IVlen/binary>> },
 		       encryptedContent := EncryptedContent }}} ?=
 	    'CMS':decode('EnvelopedData', Content),
 	Cipher = oid(Algorithm),
@@ -474,12 +474,14 @@ cec_ec(OriginatorKey, Ukm, KeyEncryptionAlgorithm, KeyEncryptionParameters,
     DhSinglePassStdDHSha256kdfScheme = 'CMS':'dhSinglePass-stdDH-sha256kdf-scheme'(),
     DhSinglePassStdDHSha384kdfScheme = 'CMS':'dhSinglePass-stdDH-sha384kdf-scheme'(),
     DhSinglePassStdDHSha512kdfScheme = 'CMS':'dhSinglePass-stdDH-sha512kdf-scheme'(),
+    DhSinglePassStdDHSha1kdfScheme = 'CMS':'dhSinglePass-stdDH-sha1kdf-scheme'(),
     maybe
 	{ok, DigestType} ?= case KeyEncryptionAlgorithm of
 				DhSinglePassStdDHSha224kdfScheme -> {ok, sha224};
 				DhSinglePassStdDHSha256kdfScheme -> {ok, sha256};
 				DhSinglePassStdDHSha384kdfScheme -> {ok, sha384};
 				DhSinglePassStdDHSha512kdfScheme -> {ok, sha512};
+				DhSinglePassStdDHSha1kdfScheme -> {ok, sha};
 				_ -> {error, unsupported_key_encryption}
 			    end,
 	{ok, SharedInfo} ?= encode_shared_info(KeyEncryptionParameters,
@@ -746,8 +748,9 @@ decode_private_key(DER) ->
     try {ok, public_key:der_decode('PrivateKeyInfo', DER)}
     catch error:_ -> {error, der_decode_private_key} end.
 
--spec oid(OID :: tuple()) -> digest_type() | cipher() | cipher_aead();
+-spec oid(OID :: tuple()) -> digest_type() | sha | cipher() | cipher_aead();
 	 (digest_type() | cipher() | cipher_aead()) -> OID :: tuple().
+oid(?'id-sha1') -> sha;
 oid(?'id-sha512') -> sha512;
 oid(?'id-sha384') -> sha384;
 oid(?'id-sha256') -> sha256;

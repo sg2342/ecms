@@ -13,11 +13,13 @@
 
 -export([curves/1]).
 
+-export([decrypt_legacy/1, verify_legacy/1]).
+
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
      decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs,
-     encrypt_fail, curves].
+     encrypt_fail, curves, decrypt_legacy, verify_legacy].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -109,6 +111,19 @@ decrypt_rsa(Config) ->
 			       key_from_pemf(Rsa1)) end,
       supported_ciphers_and_hashes()).
 
+decrypt_legacy(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    SelfS0 = filename:join(DataD, "selfs0.pem"),
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_encrypt(PlainF, EncryptedF, ["-aes256", "-recip", SelfS0,
+				     "-keyopt", "ecdh_kdf_md:sha1"]),
+    {ok, Encrypted} = file:read_file(EncryptedF),
+    {ok, Plain} = ecms:decrypt(Encrypted, cert_from_pemf(SelfS0),
+			       key_from_pemf(SelfS0)).
+
 decrypt_ec(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
     SelfS0 = filename:join(DataD, "selfs0.pem"),
@@ -153,10 +168,12 @@ decrypt_keyid(Config) ->
 
 decrypt_fail(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
-    [SelfS0, Rsa1, IvMismatchF, IvMismatchAeadF, AeadFailedF, InvalidOaepF] =
+    [SelfS0, Rsa1, IvMismatchF, IvMismatchAeadF, AeadFailedF, InvalidOaepF,
+     UnsupportedKeyEncryptionF] =
 	[filename:join(DataD, V) ||
 	    V <- ["selfs0.pem", "smrsa1.pem", "iv_mismatch", "iv_mismatch_aead",
-		  "aead_decrypt_failed", "invalid_oaep"]],
+		  "aead_decrypt_failed", "invalid_oaep",
+		  "unsupported_key_encryption"]],
     [PlainF, EncryptedF] =
 	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
     Plain = testinput(),
@@ -165,8 +182,6 @@ decrypt_fail(Config) ->
 				     "-keyopt", "ecdh_kdf_md:sha1"]),
     cms_decrypt(EncryptedF, PlainF, SelfS0),
     {ok, Encrypted} = file:read_file(EncryptedF),
-    {error, unsupported_key_encryption} =
-	ecms:decrypt(Encrypted, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
     {error, no_matching_kari_or_ktri} =
 	ecms:decrypt(Encrypted, cert_from_pemf(Rsa1), key_from_pemf(Rsa1)),
     {ok, IvMismatch} = file:read_file(IvMismatchF),
@@ -178,6 +193,10 @@ decrypt_fail(Config) ->
     {ok, AeadFailed} = file:read_file(AeadFailedF),
     {error, aead_decrypt_failed} =
 	ecms:decrypt(AeadFailed, cert_from_pemf(SelfS0), key_from_pemf(SelfS0)),
+    {ok, UnsupportedKeyEncryption} = file:read_file(UnsupportedKeyEncryptionF),
+    {error, unsupported_key_encryption} =
+	ecms:decrypt(UnsupportedKeyEncryption, cert_from_pemf(SelfS0),
+		     key_from_pemf(SelfS0)),
     {ok, InvalidOaep} = file:read_file(InvalidOaepF),
     {error, {asn1, _}} =
 	ecms:decrypt(InvalidOaep, cert_from_pemf(Rsa1), key_from_pemf(Rsa1)),
@@ -310,6 +329,19 @@ verify_pss(Config) ->
 			       "-keyopt", "rsa_padding_mode:pss",
 			       "-keyopt", "rsa_pss_saltlen:24",
 			       "-keyopt", "rsa_mgf1_md:sha224"]),
+    {ok, Signed} = file:read_file(SignedF),
+    cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
+    {ok, Plain} = file:read_file(PlainF),
+    {ok, Plain} = ecms:verify(Signed, [cert_from_pemf(SmRoot)]).
+
+verify_legacy(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [Rsa1, SmRoot] = [filename:join(DataD, V) || V <- ["smrsa1.pem", "smroot.pem"]],
+    [PlainF, SignedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "signed"]],
+    Plain = testinput(),
+    ok = file:write_file(PlainF, Plain),
+    cms_sign(PlainF, SignedF, ["-md", "sha1", "-signer", Rsa1]),
     {ok, Signed} = file:read_file(SignedF),
     cms_verify(SignedF, PlainF, ["-CAfile", SmRoot]),
     {ok, Plain} = file:read_file(PlainF),
