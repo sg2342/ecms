@@ -1,6 +1,10 @@
 ecms
 =====
 
+[![Build Status](https://github.com/sg2342/ecms/workflows/Common%20Test/badge.svg)](https://github.com/sg2342/ecms/actions?query=branch%3Amain+workflow%3A"Common+Test")
+
+
+
 Sign, verify, encrypt, and decrypt RFC 5652 Cryptographic Message Syntax (CMS)
 messages. Compatible with (some invocations of) the openSSL cms tool.
 
