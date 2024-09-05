@@ -270,7 +270,7 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Op
 	{ok, RecipientInfos} ?=
 	    recipient_infos(lists:map(fun decode_cert/1, Recipients),
 			    {CEK, DigestType, KeyLength}, []),
-	{ok, Parameters} =
+	{ok, Parameters} ?=
 	    'CMS':encode('GCMParameters',
 			 #{'aes-nonce' => IV, 'aes-ICVlen' => MAClen}),
 	AuthEnvelopedData =
@@ -283,7 +283,7 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Op
 			    #{ algorithm => oid(Cipher), parameters => Parameters},
 			encryptedContent => EncryptedContent
 		      } },
-	{ok, AuthEnvelopedDataDER} = 'CMS':encode('AuthEnvelopedData', AuthEnvelopedData),
+	{ok, AuthEnvelopedDataDER} ?= 'CMS':encode('AuthEnvelopedData', AuthEnvelopedData),
 	'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-ct-authEnvelopedData'(),
 				       content => AuthEnvelopedDataDER })
     else {error, _} = E -> E end;
@@ -307,7 +307,7 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType }) ->
 			  #{ algorithm => oid(Cipher),
 			     parameters => <<4, IvLength, IV/binary>>},
 		      encryptedContent => EncryptedContent } },
-	{ok, EnvelopedDataDER} = 'CMS':encode('EnvelopedData', EnvelopedData),
+	{ok, EnvelopedDataDER} ?= 'CMS':encode('EnvelopedData', EnvelopedData),
 	'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-envelopedData'(),
 				       content => EnvelopedDataDER})
     else {error, _} = E -> E end.
@@ -581,9 +581,9 @@ sign2(Content, SignerInfos0, DigestAlgorithms0, Crls,
 	 signers := Signers }) ->
     maybe
 	ContentDigest = crypto:hash(DigestType, Content),
-	{ok, ContentTypeDER} = 'CMS':encode('ContentType', 'CMS':'id-data'()),
-	{ok, MessageDigestDER} = 'CMS':encode('Digest', ContentDigest),
-	{ok, SigningTimeDER} = 'CMS':encode('SigningTime',
+	{ok, ContentTypeDER} ?= 'CMS':encode('ContentType', 'CMS':'id-data'()),
+	{ok, MessageDigestDER} ?= 'CMS':encode('Digest', ContentDigest),
+	{ok, SigningTimeDER} ?= 'CMS':encode('SigningTime',
 					    {generalTime, fmt_datetime(SigningTime)}),
 	SignedAttrs =
 	    [#{ attrType => 'CMS':'id-contentType'(),
@@ -592,7 +592,7 @@ sign2(Content, SignerInfos0, DigestAlgorithms0, Crls,
 		attrValues => [SigningTimeDER] },
 	     #{ attrType => 'CMS':'id-messageDigest'(),
 		attrValues => [MessageDigestDER] }],
-	{ok, SignedAttrsDER} = 'CMS':encode('SignedAttributes', SignedAttrs),
+	{ok, SignedAttrsDER} ?= 'CMS':encode('SignedAttributes', SignedAttrs),
 	Digest = crypto:hash(DigestType, SignedAttrsDER),
 	{ok, SignerInfos} ?= signer_infos(Signers, Digest, DigestType, SignedAttrs, []),
 
@@ -627,7 +627,7 @@ signer_infos([{CertDER, KeyDER} | T], Digest, DigestType, SignedAttrs, SignerInf
     maybe
 	{ok, #{ tbsCertificate := TbsCertificate }}
 	    ?= 'PKIX1Explicit88':decode('Certificate', CertDER),
-	{ok, Key} = decode_private_key(KeyDER),
+	{ok, Key} ?= decode_private_key(KeyDER),
 	{DigestAlgorithm, {SignatureAlgorithm, Opts}} =
 	    sign_algs(DigestType, Key),
 	IaS = maps:with([serialNumber, issuer], TbsCertificate),
