@@ -60,7 +60,7 @@ encoded content is `AuthEnvelopedData` and `AuthAttributes` can be set as
 `auth_attrs` in `Opts`.
 
 The encoded recipientInfos contain a `KeyAgreeRecipientInfo` for each Elliptic Curve
-certificate and a KeyTransRecipientInfo for each RSA certificate in `Recipients`.
+certificate and a `KeyTransRecipientInfo` for each RSA certificate in `Recipients`.
 
 `RSA-OAEP` is used in `KeyTransRecipientInfos`; the value of `digest_type` sets
 the Hash and MaskGen algorithms.
