@@ -13,6 +13,7 @@
   {env,[]},
   {modules, [ecms, 'CMS', 'PKIX1Explicit88', 'PKIX1-PSS-OAEP-Algorithms']},
 
+  {include_paths, ["asn1"]},
   {licenses, ["Apache-2.0"]},
-  {links, []}
+  {links, [{"GitHub", "https://github.com/sg2342/ecms"}]}
  ]}.
