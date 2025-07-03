@@ -19,7 +19,7 @@ Legacy RSA signatures and SHA1 digests are supported for **verify only**.
 Encrypt / Decrypt
 -----
 
-RSAAES-OAEP `KeyAgreeRecipientInfo` and  EC (dhSinglePass-stdDH-sha224-kdf-scheme,
+RSAAES-OAEP `KeyTransRecipientInfo` and  EC (dhSinglePass-stdDH-sha224-kdf-scheme,
 dhSinglePass-stdDH-sha256-kdf-scheme, dhSinglePass-stdDH-sha384-kdf-scheme,
 dhSinglePass-stdDH-sha512-kdf-scheme) `KeyAgreeRecipientInfo`
 
