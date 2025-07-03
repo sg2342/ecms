@@ -79,7 +79,7 @@ Derivation, the value of `digest_type` sets Hash algorithm
 			 cipher => cipher() | cipher_aead() }) ->
 	  {ok, Encrypted :: binary()} | {error, _}.
 encrypt(Data, Recipients, Opts0) ->
-    Opts = maps:merge(#{ digest_type=> sha256,
+    Opts = maps:merge(#{ digest_type => sha256,
 			 cipher => aes_256_cbc }, Opts0),
     encrypt1(Data, Recipients, Opts).
 
@@ -253,7 +253,7 @@ build_chain([Cert | _] = Chain, Certs) ->
 %%% encrypt implementation
 %%%
 encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Opts)
-  when Cipher =:= aes_128_gcm ; Cipher =:= aes_192_gcm ; Cipher =:= aes_256_gcm ->
+  when Cipher =:= aes_128_gcm; Cipher =:= aes_192_gcm; Cipher =:= aes_256_gcm ->
     #{ key_length := KeyLength, iv_length := IvLength } =
 	crypto:cipher_info(Cipher),
     <<CEK:KeyLength/binary, IV:IvLength/binary>> =
