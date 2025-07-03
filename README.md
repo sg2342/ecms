@@ -27,4 +27,4 @@ dhSinglePass-stdDH-sha512-kdf-scheme) `KeyAgreeRecipientInfo`
 
 `EnvelopedData` with AES OFB/CFB/CBC 128, 224, and 256
 
-`KeyAgreeRecipientInfo` with `rsaEncryption` is supported for **decrypt only**.
+`KeyTransRecipientInfo` with `rsaEncryption` is supported for **decrypt only**.
