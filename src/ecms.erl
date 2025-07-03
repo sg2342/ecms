@@ -12,13 +12,8 @@ Implementation of (parts of) RFC 5652 Cryptographic Message Syntax (CMS)
 
 
 -include_lib("public_key/include/public_key.hrl").
-
 -if(?OTP_RELEASE >= 28).
--define('id-RSAES-OAEP', {1, 2, 840, 113549, 1, 1, 7}).
--define('ecdsa-with-SHA224', {1, 2, 840, 10045, 4, 3, 1}).
--define('id-aes256-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 45}).
--define('id-aes192-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 25}).
--define('id-aes128-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 5}).
+-include("compat28.hrl").
 -endif.
 
 -doc """

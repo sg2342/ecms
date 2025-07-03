@@ -1,0 +1,17 @@
+-if(?OTP_RELEASE >= 28).
+-ifndef('id-RSAES-OAEP').
+-define('id-RSAES-OAEP', {1, 2, 840, 113549, 1, 1, 7}).
+-endif.
+-ifndef('ecdsa-with-SHA224').
+-define('ecdsa-with-SHA224', {1, 2, 840, 10045, 4, 3, 1}).
+-endif.
+-ifndef('id-aes256-wrap').
+-define('id-aes256-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 45}).
+-endif.
+-ifndef('id-aes192-wrap').
+-define('id-aes192-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 25}).
+-endif.
+-ifndef('id-aes128-wrap').
+-define('id-aes128-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 5}).
+-endif.
+-endif.
