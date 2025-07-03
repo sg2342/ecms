@@ -12,13 +12,8 @@ Implementation of (parts of) RFC 5652 Cryptographic Message Syntax (CMS)
 
 
 -include_lib("public_key/include/public_key.hrl").
-
 -if(?OTP_RELEASE >= 28).
--define('id-RSAES-OAEP', {1, 2, 840, 113549, 1, 1, 7}).
--define('ecdsa-with-SHA224', {1, 2, 840, 10045, 4, 3, 1}).
--define('id-aes256-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 45}).
--define('id-aes192-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 25}).
--define('id-aes128-wrap', {2, 16, 840, 1, 101, 3, 4, 1, 5}).
+-include("compat28.hrl").
 -endif.
 
 -doc """
@@ -84,7 +79,7 @@ Derivation, the value of `digest_type` sets Hash algorithm
 			 cipher => cipher() | cipher_aead() }) ->
 	  {ok, Encrypted :: binary()} | {error, _}.
 encrypt(Data, Recipients, Opts0) ->
-    Opts = maps:merge(#{ digest_type=> sha256,
+    Opts = maps:merge(#{ digest_type => sha256,
 			 cipher => aes_256_cbc }, Opts0),
     encrypt1(Data, Recipients, Opts).
 
@@ -258,7 +253,7 @@ build_chain([Cert | _] = Chain, Certs) ->
 %%% encrypt implementation
 %%%
 encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Opts)
-  when Cipher =:= aes_128_gcm ; Cipher =:= aes_192_gcm ; Cipher =:= aes_256_gcm ->
+  when Cipher =:= aes_128_gcm; Cipher =:= aes_192_gcm; Cipher =:= aes_256_gcm ->
     #{ key_length := KeyLength, iv_length := IvLength } =
 	crypto:cipher_info(Cipher),
     <<CEK:KeyLength/binary, IV:IvLength/binary>> =
