@@ -1,6 +1,6 @@
 {application, ecms,
  [{description, "RFC5652 Cryptographic Message Syntax (CMS)"},
-  {vsn, "1.0.0"},
+  {vsn, "1.0.1"},
   {registered, []},
   {applications,
    [kernel,
