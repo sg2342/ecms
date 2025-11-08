@@ -13,13 +13,13 @@
 
 -export([curves/1]).
 
--export([decrypt_legacy/1, verify_legacy/1]).
+-export([decrypt_legacy/1, verify_legacy/1, encrypt_legacy/1]).
 
 all() ->
     [verify, verify_noattr, verify_nocerts, verify_chain, verify_fail,
      verify_pss, sign, sign_chain, sign_fail, decrypt_ec, decrypt_rsa,
      decrypt_keyid, decrypt_fail, encrypt, encrypt_auth_attrs,
-     encrypt_fail, curves, decrypt_legacy, verify_legacy].
+     encrypt_fail, curves, decrypt_legacy, verify_legacy, encrypt_legacy].
 
 encrypt(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -84,11 +84,26 @@ encrypt_auth_attrs(Config) ->
 
 encrypt_fail(Config) ->
     Dsa1 = filename:join(proplists:get_value(data_dir, Config), "smdsa1.pem"),
+    {error, unsupported_encrypt_opts} =
+	ecms:encrypt(<<>>, [<<>>], #{ legacy => true, cipher => aes_192_gcm }),
     {error, unsupported_key_type} =
 	ecms:encrypt(<<>>, [cert_from_pemf(Dsa1)]),
     {error, der_decode_cert} =
 	ecms:encrypt(<<>>, [<<>>], #{cipher => aes_256_gcm}),
     {error, der_decode_cert} = ecms:encrypt(<<>>, [<<>>]).
+
+encrypt_legacy(Config) ->
+    [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
+    [SelfS4] = [filename:join(DataD, V) || V <- ["selfs4.pem"]],
+    [PlainF, EncryptedF] =
+	[filename:join(PrivD, V) || V <- ["plain", "encrypted"]],
+    Plain = testinput(),
+    {ok, Encrypted} = ecms:encrypt(Plain, [cert_from_pemf(SelfS4)],
+				   #{ cipher => aes_256_cbc,
+				      legacy => true }),
+    ok = file:write_file(EncryptedF, Encrypted),
+    smime_decrypt(EncryptedF, PlainF, SelfS4),
+    {ok, Plain} = file:read_file(PlainF).
 
 decrypt_rsa(Config) ->
     [PrivD, DataD] = [proplists:get_value(V, Config) || V <- [priv_dir, data_dir]],
@@ -466,6 +481,10 @@ cms_decrypt(Encrypted, Plain, Recip) -> cms_decrypt(Encrypted, Plain, Recip, [])
 cms_decrypt(Encrypted, Plain, Recip, Tail) ->
     {0, _} = spwn(["openssl", "cms", "-decrypt", "-inform", "DER",
 		   "-in", Encrypted, "-out", Plain, "-recip", Recip | Tail]).
+
+smime_decrypt(Encrypted, Plain, Recip) ->
+    {0, _} = spwn(["openssl", "smime", "-decrypt", "-inform", "DER",
+		   "-in", Encrypted, "-out", Plain, "-inkey", Recip]).
 
 -spec spwn([string()]) -> {ExitCode :: integer(), string()}.
 spwn([Arg0 | Args]) ->

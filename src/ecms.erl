@@ -55,8 +55,8 @@ encrypt(Data, Recipients) ->
 -doc """
 Encrypt `Data` to `Recipients`
 
-When not set in `Opts`: `digest_type` defaults to `'sha256'` and `cipher` to
-`'aes_256_cbc'`.
+When not set in `Opts`: `digest_type` defaults to `'sha256'`, `cipher` to
+`'aes_256_cbc'` and `legacy` to `'false'`.
 
 For `cipher` set to `'aes_128_gcm'`, `'aes_192_gcm'`, or `'aes_256_gcm'` the
 encoded content is `AuthEnvelopedData` and `AuthAttributes` can be set as
@@ -65,22 +65,29 @@ encoded content is `AuthEnvelopedData` and `AuthAttributes` can be set as
 The encoded recipientInfos contain a `KeyAgreeRecipientInfo` for each Elliptic Curve
 certificate and a `KeyTransRecipientInfo` for each RSA certificate in `Recipients`.
 
-`RSA-OAEP` is used in `KeyTransRecipientInfos`; the value of `digest_type` sets
-the Hash and MaskGen algorithms.
+If `legacy` is set to `'false'` (default): `RSA-OAEP` is used in
+`KeyTransRecipientInfos`; the value of `digest_type` sets Hash and MaskGen algorithms.
+
+If `legacy` is set to `'true'`: `'rsaEncryption'` is used in `KeyTransRecipientInfos`.
 
 `KeyAgreeRecipientInfo` uses RFC3394 AES Key Wrap and `dhSinglePass-stdDH` Key
-Derivation, the value of `digest_type` sets Hash algorithm
+Derivation, the value of `digest_type` sets Hash algorithm.
+
+Use of authenticated ciphers when `legacy` is set to `'true'` will result in
+ `{error, unsupported_encrypt_opts}`.
 """.
 -spec encrypt(Data :: binary(),
 	      Recipients :: [der_certificate()],
 	      Opts :: #{ digest_type => digest_type(),
+			 legacy => boolean(),
 			 auth_attrs => [#{ attrType := tuple(),
 					   attrValues := [binary()] }, ...],
 			 cipher => cipher() | cipher_aead() }) ->
 	  {ok, Encrypted :: binary()} | {error, _}.
 encrypt(Data, Recipients, Opts0) ->
     Opts = maps:merge(#{ digest_type => sha256,
-			 cipher => aes_256_cbc }, Opts0),
+			 cipher => aes_256_cbc,
+			 legacy => false}, Opts0),
     encrypt1(Data, Recipients, Opts).
 
 -doc """
@@ -252,6 +259,9 @@ build_chain([Cert | _] = Chain, Certs) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% encrypt implementation
 %%%
+encrypt1(_, _, #{ cipher := Cipher, legacy := true })
+  when Cipher =:= aes_128_gcm; Cipher =:= aes_192_gcm; Cipher =:= aes_256_gcm ->
+    {error, unsupported_encrypt_opts};
 encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Opts)
   when Cipher =:= aes_128_gcm; Cipher =:= aes_192_gcm; Cipher =:= aes_256_gcm ->
     #{ key_length := KeyLength, iv_length := IvLength } =
@@ -272,7 +282,7 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Op
     maybe
 	{ok, RecipientInfos} ?=
 	    recipient_infos(lists:map(fun decode_cert/1, Recipients),
-			    {CEK, DigestType, KeyLength}, []),
+			    {CEK, DigestType, KeyLength, false}, []),
 	{ok, Parameters} ?=
 	    'CMS':encode('GCMParameters',
 			 #{'aes-nonce' => IV, 'aes-ICVlen' => MAClen}),
@@ -290,19 +300,21 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType } = Op
 	'CMS':encode('ContentInfo', #{ contentType => 'CMS':'id-ct-authEnvelopedData'(),
 				       content => AuthEnvelopedDataDER })
     else {error, _} = E -> E end;
-encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType }) ->
+encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType,
+			      legacy := Legacy }) ->
     #{ key_length := KeyLength, block_size := BlockSize, iv_length := IvLength } =
 	crypto:cipher_info(Cipher),
     <<CEK:KeyLength/binary, IV:IvLength/binary>> =
 	crypto:strong_rand_bytes(KeyLength + IvLength),
     EncryptedContent =
 	crypto:crypto_one_time(Cipher, CEK, IV, pad(Data, BlockSize), true),
+    EnvelopedDataVersion = case Legacy of true -> v0; false -> v2 end,
     maybe
 	{ok, RecipientInfos} ?=
 	    recipient_infos(lists:map(fun decode_cert/1, Recipients),
-			    {CEK, DigestType, KeyLength}, []),
+			    {CEK, DigestType, KeyLength, Legacy}, []),
 	EnvelopedData =
-	    #{ version => v2,
+	    #{ version => EnvelopedDataVersion,
 	       recipientInfos => RecipientInfos,
 	       encryptedContentInfo =>
 		   #{ contentType => 'CMS':'id-data'(),
@@ -316,12 +328,23 @@ encrypt1(Data, Recipients, #{ cipher := Cipher, digest_type := DigestType }) ->
     else {error, _} = E -> E end.
 
 -spec recipient_infos([{ok, cert_info()} | {error, _}],
-		      {CEK :: binary(), digest_type(), KeyLength :: pos_integer()}, Acc) ->
+		      {CEK :: binary(), digest_type(), KeyLength :: pos_integer(),
+		       Legacy :: boolean()}, Acc) ->
 	  {ok, Acc} | {error, _} when Acc :: [{kari, #{}} | {ktri, #{}}].
 recipient_infos([], _P, Acc) -> {ok, lists:reverse(Acc)};
 recipient_infos([{error, _} = E | _], _, _) -> E;
+recipient_infos([{ok, {IaS, _,  #'RSAPublicKey'{} = RsaPub}} | T],
+		{CEK, _, _, true} = P, Acc) ->
+    R = {ktri,
+	 #{version => v0,
+	   keyEncryptionAlgorithm => #{ algorithm => ?'rsaEncryption',
+					parameters => <<5, 0>> },
+	   rid => {issuerAndSerialNumber, IaS},
+	   encryptedKey => public_key:encrypt_public(CEK, RsaPub, [])
+	  }},
+    recipient_infos(T, P, [R | Acc]);
 recipient_infos([{ok, {IaS, SkI,  #'RSAPublicKey'{} = RsaPub}} | T], P, Acc) ->
-    {CEK, DigestType, _} = P,
+    {CEK, DigestType, _, _} = P,
     {RId, Version} =
 	case SkI of
 	    false -> {{issuerAndSerialNumber, IaS}, v0};
@@ -345,7 +368,7 @@ recipient_infos([{ok, {IaS, SkI,  #'RSAPublicKey'{} = RsaPub}} | T], P, Acc) ->
 	    encryptedKey => EncryptedKey }},
     recipient_infos(T, P, [R | Acc]);
 recipient_infos([{ok, {IaS, SkI,  {#'ECPoint'{} = EcPub, EcParameters}}} | T],
-		{CEK, DigestType, KeyLength} = P, Acc) ->
+		{CEK, DigestType, KeyLength, _} = P, Acc) ->
     RId = case SkI of
 	      false -> {issuerAndSerialNumber, IaS};
 	      _ -> {rKeyId, #{ subjectKeyIdentifier => SkI }} end,
